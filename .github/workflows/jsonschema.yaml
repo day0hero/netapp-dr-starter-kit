@@ -1,0 +1,59 @@
+---
+name: Verify json schema
+
+on: [push, pull_request]
+
+jobs:
+  jsonschema_tests:
+    name: Json Schema tests
+    strategy:
+      matrix:
+        python-version: [3.11]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install check-jsonschema
+
+      - name: Install yq
+        uses: chrisdickinson/setup-yq@fa3192edd79d6eb0e4e12de8dde3a0c26f2b853b # 2025-08-25
+        with:
+          yq-version: v4.30.7
+
+      - name: Verify secrets json schema against templates
+        run: |
+          cp ./values-secret.yaml.template ./values-secret.yaml
+          check-jsonschema --fill-defaults --schemafile https://raw.githubusercontent.com/validatedpatterns/rhvp.cluster_utils/refs/heads/main/roles/vault_utils/values-secrets.v2.schema.json values-secret.yaml
+          rm -f ./values-secret.yaml
+
+      - name: Verify ClusterGroup values.schema.json against values-*yaml files
+        run: |
+          set -e
+          find . -maxdepth 1 -type f -name "values-*.yaml" ! -name "values-global.yaml" -print0 | while IFS= read -r -d '' i;
+          do
+            if [[ "$i" =~ 4\.[0-9]+ ]]; then
+              echo "Skipping $i"
+              continue
+            fi
+            echo "$i"
+            # disable shellcheck of single quotes in yq
+            # shellcheck disable=2016
+            yq eval-all '. as $item ireduce ({}; . * $item )' values-global.yaml "$i" > tmp.yaml
+            check-jsonschema --fill-defaults --schemafile https://raw.githubusercontent.com/validatedpatterns/clustergroup-chart/refs/heads/main/values.schema.json tmp.yaml
+            rm -f tmp.yaml
+          done
+

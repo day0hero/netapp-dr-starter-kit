@@ -1,0 +1,21 @@
+---
+secretStore:
+  name: vault-backend
+  kind: ClusterSecretStore
+
+esoversion: "external-secrets.io/v1beta1"
+configdemosecret:
+  key: secret/data/global/config-demo
+  refreshInterval: 5m
+
+global:
+  hubClusterDomain: hub.example.com
+  localClusterDomain: region-one.example.com
+
+clusterGroup:
+  isHubCluster: true
+
+image:
+  repository: registry.access.redhat.com/ubi10/httpd-24
+  tag: "10.0-1755779646"
+  pullPolicy: IfNotPresent
