@@ -3,3 +3,172 @@
 # You can add custom targets above or below the include line
 
 include Makefile-common
+
+# =============================================================================
+# NetApp DR Starter Kit - Infrastructure Targets
+# =============================================================================
+#
+# These targets manage the DR infrastructure:
+#   - Terraform state backend (S3 bucket + DynamoDB from values-trident.yaml)
+#   - Cluster discovery (auto-detect VPC, CIDR, region from kubeconfigs)
+#   - VPC peering between prod and DR clusters
+#   - FSx for NetApp ONTAP filesystems in each region
+#
+# Required:
+#   PROD_KUBECONFIG - path to production cluster kubeconfig
+#   DR_KUBECONFIG   - path to DR cluster kubeconfig
+#
+# The terraform state bucket name is read from values-trident.yaml
+# (.terraform.state.bucket) automatically by the playbook.
+# =============================================================================
+
+# Expand ~ in kubeconfig paths
+PROD_KUBECONFIG ?=
+DR_KUBECONFIG ?=
+_PROD_KUBECONFIG := $(if $(PROD_KUBECONFIG),$(shell echo $(PROD_KUBECONFIG)),)
+_DR_KUBECONFIG := $(if $(DR_KUBECONFIG),$(shell echo $(DR_KUBECONFIG)),)
+EXTRA_PLAYBOOK_OPTS ?=
+
+# Optional overrides (empty = auto-detect from cluster)
+PROD_CLUSTER ?=
+DR_CLUSTER ?=
+PROD_REGION ?=
+DR_REGION ?=
+PROD_VPC_CIDR ?=
+DR_VPC_CIDR ?=
+
+# Build the -e extra-vars string from overrides
+_DR_EXTRA_VARS := -e prod_kubeconfig=$(_PROD_KUBECONFIG) -e dr_kubeconfig=$(_DR_KUBECONFIG)
+ifneq ($(PROD_CLUSTER),)
+  _DR_EXTRA_VARS += -e prod_cluster_name_override=$(PROD_CLUSTER)
+endif
+ifneq ($(DR_CLUSTER),)
+  _DR_EXTRA_VARS += -e dr_cluster_name_override=$(DR_CLUSTER)
+endif
+ifneq ($(PROD_REGION),)
+  _DR_EXTRA_VARS += -e prod_region_override=$(PROD_REGION)
+endif
+ifneq ($(DR_REGION),)
+  _DR_EXTRA_VARS += -e dr_region_override=$(DR_REGION)
+endif
+ifneq ($(PROD_VPC_CIDR),)
+  _DR_EXTRA_VARS += -e prod_vpc_cidr_override=$(PROD_VPC_CIDR)
+endif
+ifneq ($(DR_VPC_CIDR),)
+  _DR_EXTRA_VARS += -e dr_vpc_cidr_override=$(DR_VPC_CIDR)
+endif
+
+# Validation
+define _validate_kubeconfigs
+	@if [ -z "$(_PROD_KUBECONFIG)" ]; then \
+		echo "Error: PROD_KUBECONFIG is required."; \
+		echo "Usage: make $(1) PROD_KUBECONFIG=/path/to/prod DR_KUBECONFIG=/path/to/dr"; \
+		exit 1; \
+	fi
+	@if [ -z "$(_DR_KUBECONFIG)" ]; then \
+		echo "Error: DR_KUBECONFIG is required."; \
+		echo "Usage: make $(1) PROD_KUBECONFIG=/path/to/prod DR_KUBECONFIG=/path/to/dr"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(_PROD_KUBECONFIG)" ]; then \
+		echo "Error: PROD_KUBECONFIG file not found: $(_PROD_KUBECONFIG)"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(_DR_KUBECONFIG)" ]; then \
+		echo "Error: DR_KUBECONFIG file not found: $(_DR_KUBECONFIG)"; \
+		exit 1; \
+	fi
+endef
+
+##@ NetApp DR Infrastructure
+
+.PHONY: build-dr
+build-dr: ## Build complete DR infrastructure (state backend, VPC peering, FSx filesystems)
+	$(call _validate_kubeconfigs,build-dr)
+	@echo "=========================================="
+	@echo "Building DR Infrastructure"
+	@echo "  Prod kubeconfig: $(_PROD_KUBECONFIG)"
+	@echo "  DR kubeconfig:   $(_DR_KUBECONFIG)"
+	@echo "  State bucket:    from values-trident.yaml"
+	@echo "=========================================="
+	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/dr-setup.yaml \
+		-e @ansible/dr-vars.yml \
+		$(_DR_EXTRA_VARS)
+
+.PHONY: destroy-dr
+destroy-dr: ## Destroy DR infrastructure (FSx filesystems and VPC peering; preserves state bucket)
+	$(call _validate_kubeconfigs,destroy-dr)
+	@echo "=========================================="
+	@echo "Destroying DR Infrastructure"
+	@echo "  Prod kubeconfig: $(_PROD_KUBECONFIG)"
+	@echo "  DR kubeconfig:   $(_DR_KUBECONFIG)"
+	@echo "  Note: State bucket is preserved"
+	@echo "=========================================="
+	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/dr-setup.yaml \
+		-e @ansible/dr-vars.yml \
+		$(_DR_EXTRA_VARS) \
+		-e destroy_resources=true
+
+# State bucket name, DynamoDB table, and region from values-trident.yaml
+_STATE_BUCKET := $(shell yq '.terraform.state.bucket // ""' values-trident.yaml 2>/dev/null)
+_DYNAMODB_TABLE := $(shell yq '.terraform.state.dynamodb_table // "terraform-state-lock"' values-trident.yaml 2>/dev/null)
+_STATE_REGION := $(shell yq '.terraform.state.region // "us-east-1"' values-trident.yaml 2>/dev/null)
+
+.PHONY: destroy-terraform-state
+destroy-terraform-state: ## Destroy the Terraform state backend (S3 bucket + DynamoDB table) - DESTRUCTIVE
+	@if [ -z "$(_STATE_BUCKET)" ]; then \
+		echo "Error: Could not read .terraform.state.bucket from values-trident.yaml"; \
+		exit 1; \
+	fi
+	@echo "=========================================="
+	@echo "WARNING: Destroying Terraform State Backend"
+	@echo "=========================================="
+	@echo "  S3 Bucket:      $(_STATE_BUCKET)"
+	@echo "  DynamoDB Table: $(_DYNAMODB_TABLE)"
+	@echo "  Region:         $(_STATE_REGION)"
+	@echo ""
+	@echo "  This will permanently delete all Terraform state!"
+	@echo "  Make sure you have destroyed all DR resources first"
+	@echo "  (make destroy-dr) or they will become orphaned."
+	@echo "=========================================="
+	@echo ""
+	@read -p "Type 'yes' to confirm: " confirm && [ "$$confirm" = "yes" ] || (echo "Aborted."; exit 1)
+	@echo ""
+	@echo "--- Emptying S3 bucket (all object versions) ---"
+	@aws s3api list-object-versions \
+		--bucket $(_STATE_BUCKET) \
+		--region $(_STATE_REGION) \
+		--query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
+		--output json 2>/dev/null | \
+	python3 -c "\
+	import sys, json, subprocess; \
+	data = json.load(sys.stdin); \
+	objects = data.get('Objects') or []; \
+	[subprocess.run(['aws', 's3api', 'delete-objects', '--bucket', '$(_STATE_BUCKET)', '--region', '$(_STATE_REGION)', '--delete', json.dumps({'Objects': objects[i:i+1000], 'Quiet': True})], check=True) for i in range(0, len(objects), 1000)] if objects else None; \
+	print(f'Deleted {len(objects)} object versions') if objects else print('No object versions to delete')" || true
+	@echo "--- Removing delete markers ---"
+	@aws s3api list-object-versions \
+		--bucket $(_STATE_BUCKET) \
+		--region $(_STATE_REGION) \
+		--query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' \
+		--output json 2>/dev/null | \
+	python3 -c "\
+	import sys, json, subprocess; \
+	data = json.load(sys.stdin); \
+	objects = data.get('Objects') or []; \
+	[subprocess.run(['aws', 's3api', 'delete-objects', '--bucket', '$(_STATE_BUCKET)', '--region', '$(_STATE_REGION)', '--delete', json.dumps({'Objects': objects[i:i+1000], 'Quiet': True})], check=True) for i in range(0, len(objects), 1000)] if objects else None; \
+	print(f'Removed {len(objects)} delete markers') if objects else print('No delete markers to remove')" || true
+	@echo "--- Deleting S3 bucket ---"
+	@aws s3api delete-bucket --bucket $(_STATE_BUCKET) --region $(_STATE_REGION) \
+		&& echo "S3 bucket '$(_STATE_BUCKET)' deleted" \
+		|| echo "S3 bucket '$(_STATE_BUCKET)' not found (already deleted?)"
+	@echo "--- Deleting DynamoDB table ---"
+	@aws dynamodb delete-table --table-name $(_DYNAMODB_TABLE) --region $(_STATE_REGION) > /dev/null 2>&1 \
+		&& echo "DynamoDB table '$(_DYNAMODB_TABLE)' deleted" \
+		|| echo "DynamoDB table '$(_DYNAMODB_TABLE)' not found (already deleted?)"
+	@echo "--- Cleaning local working directory ---"
+	@rm -rf /tmp/netapp-dr-terraform/terraform-state
+	@echo ""
+	@echo "=========================================="
+	@echo "  Terraform State Backend Destroyed"
+	@echo "=========================================="

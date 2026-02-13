@@ -7,3 +7,15 @@ pattern-vault.init
 vault.init
 super-linter.log
 common/pattern-vault.init
+
+# Terraform
+terraform/**/.terraform/
+terraform/**/.terraform.lock.hcl
+terraform/**/terraform.tfstate*
+terraform/**/terraform.tfvars
+terraform/**/backend.tf
+terraform/**/tfplan*
+/tmp/netapp-dr-terraform/
+
+# Ansible
+*.retry

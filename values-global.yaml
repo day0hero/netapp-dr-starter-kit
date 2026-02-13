@@ -1,6 +1,6 @@
 ---
 global:
-  pattern: multicloud-gitops
+  pattern: netapp-dr-starter-kit
   options:
     useCSV: false
     syncPolicy: Automatic
