@@ -1,0 +1,82 @@
+---
+# =============================================================================
+# DR Setup Variables
+# =============================================================================
+#
+# This file provides defaults for the DR infrastructure setup.
+# Values are auto-detected from the clusters when possible.
+# Override any value via -e on the command line or by editing this file.
+#
+# The Terraform state bucket name is read from values-trident.yaml
+# (.terraform.state.bucket) - edit it there.
+#
+# Usage:
+#   make build-dr PROD_KUBECONFIG=~/prod-kubeconfig DR_KUBECONFIG=~/dr-kubeconfig
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Cluster Kubeconfigs (REQUIRED - pass via Make/command line)
+# -----------------------------------------------------------------------------
+# prod_kubeconfig: "/path/to/prod/kubeconfig"
+# dr_kubeconfig: "/path/to/dr/kubeconfig"
+
+# -----------------------------------------------------------------------------
+# Cluster Overrides (optional - auto-detected from kubeconfigs if not set)
+# -----------------------------------------------------------------------------
+# These values are looked up from the clusters automatically:
+#   - infrastructure/cluster .status.infrastructureName -> cluster name & VPC name
+#   - infrastructure/cluster .status.platformStatus.aws.region -> region
+#   - cm/cluster-config-v1 (kube-system) networking.machineNetwork[0].cidr -> VPC CIDR
+#
+# Set these to skip auto-detection:
+
+# prod_cluster_name_override: ""
+# prod_region_override: ""
+# prod_vpc_cidr_override: ""
+# prod_vpc_name_override: ""
+
+# dr_cluster_name_override: ""
+# dr_region_override: ""
+# dr_vpc_cidr_override: ""
+# dr_vpc_name_override: ""
+
+# -----------------------------------------------------------------------------
+# Terraform State Backend
+# -----------------------------------------------------------------------------
+# The S3 bucket name is read from values-trident.yaml (.terraform.state.bucket).
+# The DynamoDB table and bucket are created automatically by the playbook.
+terraform_state_dynamodb_table: "terraform-state-lock"
+
+# -----------------------------------------------------------------------------
+# FSx ONTAP Configuration
+# -----------------------------------------------------------------------------
+# File system names default to: <cluster_name>-<region>-fsx
+# Override per cluster:
+# prod_file_system_name: ""
+# dr_file_system_name: ""
+
+storage_capacity: 1024        # GiB (minimum 1024)
+throughput_capacity: 1024      # MBps (128, 256, 512, 1024, 2048, 4096)
+storage_type: "SSD"            # SSD or HDD
+deployment_type: "MULTI_AZ_1"  # MULTI_AZ_1 or SINGLE_AZ_1
+weekly_maintenance_time: "7:01:00"  # d:HH:MM (UTC)
+
+# FSx passwords (read from ~/.fsx if not set)
+# fsx_admin_password: ""
+# svm_admin_password: ""
+
+# SVM Configuration
+svm_name: "SVM1"
+root_volume_security_style: "UNIX"
+
+# Secrets Manager
+create_secrets: true
+
+# -----------------------------------------------------------------------------
+# Tags
+# -----------------------------------------------------------------------------
+tags:
+  Environment: "production"
+  ManagedBy: "Terraform"
+  Purpose: "NetApp-DR"

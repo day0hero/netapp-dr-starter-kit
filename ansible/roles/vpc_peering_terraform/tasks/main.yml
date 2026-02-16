@@ -1,0 +1,309 @@
+---
+# vpc_peering_terraform role
+#
+# Manages cross-region VPC peering via Terraform.
+# Expects prod_cluster and dr_cluster dicts from cluster_discovery role.
+# Terraform runs inside a container (podman/docker).
+
+- name: Display VPC peering configuration
+  debug:
+    msg:
+      - "=========================================="
+      - "VPC Peering Terraform Role"
+      - "=========================================="
+      - "Prod: {{ prod_cluster.cluster_name }} ({{ prod_cluster.region }}) - {{ prod_cluster.vpc_cidr }}"
+      - "DR:   {{ dr_cluster.cluster_name }} ({{ dr_cluster.region }}) - {{ dr_cluster.vpc_cidr }}"
+      - "Operation: {{ 'DESTROY' if (terraform_destroy | default(false)) else 'APPLY' }}"
+      - "State: {{ terraform_state_bucket | default('local') }}"
+      - "Container: {{ terraform_image }}"
+      - "=========================================="
+
+# Get AWS credentials (needed for both operations and bucket check)
+- name: Get AWS credentials from boto3 session
+  ansible.builtin.shell: |
+    python3 -c "
+    import json, boto3
+    creds = boto3.Session().get_credentials().get_frozen_credentials()
+    print(json.dumps({'ak': creds.access_key, 'sk': creds.secret_key, 'st': creds.token or ''}))
+    "
+  register: _boto3_creds
+  changed_when: false
+
+- name: Set AWS credentials
+  set_fact:
+    _aws_creds: "{{ _boto3_creds.stdout | from_json }}"
+    _aws_env:
+      AWS_ACCESS_KEY_ID: "{{ (_boto3_creds.stdout | from_json).ak }}"
+      AWS_SECRET_ACCESS_KEY: "{{ (_boto3_creds.stdout | from_json).sk }}"
+      AWS_SESSION_TOKEN: "{{ (_boto3_creds.stdout | from_json).st }}"
+      AWS_REGION: "{{ prod_cluster.region }}"
+      AWS_DEFAULT_REGION: "{{ prod_cluster.region }}"
+
+# ---------------------------------------------------------------------------
+# Pre-flight: verify the S3 state bucket exists before running terraform.
+# If the bucket was already destroyed, terraform init will fail. In that case
+# skip the operation — there is no state to read or destroy.
+# ---------------------------------------------------------------------------
+- name: Check if S3 state bucket exists
+  ansible.builtin.shell: >-
+    aws s3api head-bucket --bucket {{ terraform_state_bucket }} 2>/dev/null
+    && echo "exists" || echo "missing"
+  register: _state_bucket_check
+  changed_when: false
+  environment: "{{ _aws_env }}"
+  when: terraform_state_bucket | default('') | length > 0
+
+- name: Set state bucket availability flag
+  set_fact:
+    _state_bucket_available: >-
+      {{ (terraform_state_bucket | default('') | length > 0) and
+         (_state_bucket_check.stdout | default('missing') is search('exists')) }}
+
+- name: Skip - S3 state bucket does not exist
+  debug:
+    msg:
+      - "S3 state bucket '{{ terraform_state_bucket }}' does not exist."
+      - "Skipping {{ 'destroy' if (terraform_destroy | default(false)) else 'apply' }} for VPC peering."
+      - "If you need to clean up orphaned resources, do so manually in the AWS console."
+  when: not _state_bucket_available and (terraform_state_bucket | default('') | length > 0)
+
+# ---------------------------------------------------------------------------
+# Common setup (runs for both create and destroy when state bucket is available)
+# ---------------------------------------------------------------------------
+- name: Setup terraform workspace
+  when: _state_bucket_available or (terraform_state_bucket | default('') | length == 0)
+  block:
+    - name: Create terraform working directory
+      file:
+        path: "{{ vpc_peering_tf_workdir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Copy terraform files to working directory
+      copy:
+        src: "{{ vpc_peering_tf_source }}/{{ item }}"
+        dest: "{{ vpc_peering_tf_workdir }}/{{ item }}"
+        mode: '0644'
+      loop:
+        - main.tf
+        - variables.tf
+        - outputs.tf
+        - providers.tf
+
+    - name: Check if S3 backend is configured
+      set_fact:
+        use_s3_backend: "{{ terraform_state_bucket | default('') | length > 0 }}"
+
+    - name: Generate backend.tf for S3 state storage
+      template:
+        src: backend.tf.j2
+        dest: "{{ vpc_peering_tf_workdir }}/backend.tf"
+        mode: '0644'
+      when: use_s3_backend
+
+    - name: Remove backend.tf if not using S3 backend
+      file:
+        path: "{{ vpc_peering_tf_workdir }}/backend.tf"
+        state: absent
+      when: not use_s3_backend
+
+    - name: Generate terraform.tfvars
+      template:
+        src: terraform.tfvars.j2
+        dest: "{{ vpc_peering_tf_workdir }}/terraform.tfvars"
+        mode: '0600'
+      when: not (terraform_destroy | default(false))
+
+    # Build the container terraform command prefix
+    - name: Build terraform container command
+      set_fact:
+        _tf_cmd: >-
+          {{ container_runtime }} run --rm
+          -v {{ vpc_peering_tf_workdir }}:/workspace:Z
+          -w /workspace
+          -e AWS_ACCESS_KEY_ID={{ _aws_creds.ak }}
+          -e AWS_SECRET_ACCESS_KEY={{ _aws_creds.sk }}
+          {% if _aws_creds.st %}-e AWS_SESSION_TOKEN={{ _aws_creds.st }}{% endif %}
+          -e AWS_REGION={{ prod_cluster.region }}
+          -e AWS_DEFAULT_REGION={{ prod_cluster.region }}
+          {{ terraform_image }}
+
+    - name: Initialize Terraform
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform init -upgrade -reconfigure -no-color"
+      register: _tf_init
+      changed_when: "'Terraform has been successfully initialized' in _tf_init.stdout"
+
+    # -----------------------------------------------------------------
+    # Idempotency: import existing AWS resources into terraform state
+    # if they exist in AWS but not in terraform state (e.g. after state
+    # bucket was recreated). This prevents "already exists" errors.
+    # -----------------------------------------------------------------
+    - name: Check terraform state for peering connection
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform state list 2>/dev/null"
+      register: _tf_state_list
+      changed_when: false
+      failed_when: false
+
+    - name: Check for existing VPC peering in AWS
+      ansible.builtin.shell: >-
+        aws ec2 describe-vpc-peering-connections
+        --filters
+        Name=requester-vpc-info.vpc-id,Values={{ prod_cluster.vpc_id }}
+        Name=accepter-vpc-info.vpc-id,Values={{ dr_cluster.vpc_id }}
+        Name=status-code,Values=active
+        --query 'VpcPeeringConnections[0].VpcPeeringConnectionId'
+        --output text
+        --region {{ prod_cluster.region }}
+      environment: "{{ _aws_env }}"
+      register: _existing_peering
+      changed_when: false
+      when: "'aws_vpc_peering_connection.prod_to_dr' not in (_tf_state_list.stdout | default(''))"
+
+    - name: Set existing peering ID
+      set_fact:
+        _existing_pcx_id: "{{ _existing_peering.stdout | default('None') | trim }}"
+      when: _existing_peering is not skipped
+
+    # --- Import peering connection if it exists in AWS but not in state ---
+    - name: Import existing VPC peering connection
+      when:
+        - _existing_pcx_id is defined
+        - _existing_pcx_id != 'None'
+        - _existing_pcx_id != ''
+        - "'aws_vpc_peering_connection.prod_to_dr' not in (_tf_state_list.stdout | default(''))"
+      block:
+        - name: Display peering import notice
+          debug:
+            msg: "Found existing VPC peering {{ _existing_pcx_id }} not in state - importing..."
+
+        - name: Generate peering import script
+          copy:
+            dest: "{{ vpc_peering_tf_workdir }}/import.sh"
+            mode: '0755'
+            content: |
+              #!/bin/sh
+              echo "=== Importing VPC peering connection ==="
+              terraform import -no-color aws_vpc_peering_connection.prod_to_dr {{ _existing_pcx_id }} || true
+              echo "=== Importing VPC peering accepter ==="
+              terraform import -no-color aws_vpc_peering_connection_accepter.dr_accept {{ _existing_pcx_id }} || true
+              echo "=== Peering import complete ==="
+
+        - name: Run peering import script inside container
+          ansible.builtin.shell: "{{ _tf_cmd }} sh /workspace/import.sh"
+          register: _import_result
+
+        - name: Display peering import results
+          debug:
+            msg: "{{ _import_result.stdout_lines }}"
+
+        - name: Clean up import script
+          file:
+            path: "{{ vpc_peering_tf_workdir }}/import.sh"
+            state: absent
+
+    # --- Delete stale routes if they exist in AWS but not in terraform state ---
+    # This is separate from the peering import because the peering may have
+    # been imported on a previous run while routes remain orphaned.
+    # We only run this when a peering connection exists in AWS (brownfield);
+    # on greenfield there are no routes to clean up.
+    - name: Check if routes are tracked in terraform state
+      set_fact:
+        _routes_in_state: "{{ 'aws_route.prod_to_dr' in (_tf_state_list.stdout | default('')) }}"
+        # A peering connection exists if we found one in AWS or if it's
+        # already tracked in state.  On greenfield neither is true, so we
+        # can safely skip the (noisy) route-deletion loop.
+        _peering_connection_exists: >-
+          {{ ((_existing_pcx_id | default('')) not in ['None', '']) or
+             ('aws_vpc_peering_connection.prod_to_dr' in (_tf_state_list.stdout | default(''))) }}
+
+    - name: Delete orphaned routes from AWS
+      when:
+        - not _routes_in_state
+        - _peering_connection_exists | bool
+      block:
+        - name: Display route cleanup notice
+          debug:
+            msg: "Routes not in terraform state - deleting from AWS so terraform can recreate them."
+
+        - name: Delete orphaned prod-to-dr routes
+          ansible.builtin.shell: >-
+            aws ec2 delete-route
+            --route-table-id {{ item }}
+            --destination-cidr-block {{ dr_cluster.vpc_cidr }}
+            --region {{ prod_cluster.region }}
+          environment: "{{ _aws_env }}"
+          loop: "{{ prod_cluster.all_route_table_ids }}"
+          register: _del_prod_routes
+          failed_when: false
+          changed_when: _del_prod_routes.rc == 0
+
+        - name: Delete orphaned dr-to-prod routes
+          ansible.builtin.shell: >-
+            aws ec2 delete-route
+            --route-table-id {{ item }}
+            --destination-cidr-block {{ prod_cluster.vpc_cidr }}
+            --region {{ dr_cluster.region }}
+          environment: "{{ _aws_env }}"
+          loop: "{{ dr_cluster.all_route_table_ids }}"
+          register: _del_dr_routes
+          failed_when: false
+          changed_when: _del_dr_routes.rc == 0
+
+        - name: Display route cleanup results
+          debug:
+            msg:
+              - "Prod routes deleted: {{ _del_prod_routes.results | selectattr('rc', 'eq', 0) | list | length }}/{{ prod_cluster.all_route_table_ids | length }}"
+              - "DR routes deleted: {{ _del_dr_routes.results | selectattr('rc', 'eq', 0) | list | length }}/{{ dr_cluster.all_route_table_ids | length }}"
+
+# ---------------------------------------------------------------------------
+# Create / Apply
+# ---------------------------------------------------------------------------
+- name: Apply terraform
+  when:
+    - not (terraform_destroy | default(false))
+    - _state_bucket_available or (terraform_state_bucket | default('') | length == 0)
+  block:
+    - name: Terraform plan
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform plan -out=tfplan -input=false -no-color"
+      register: _tf_plan
+
+    - name: Terraform apply
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform apply -auto-approve -no-color tfplan"
+      register: _tf_apply
+
+    - name: Get Terraform outputs
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform output -json -no-color"
+      register: _tf_outputs_raw
+      changed_when: false
+
+    - name: Parse and display peering outputs
+      debug:
+        msg:
+          - "=========================================="
+          - "VPC Peering Complete"
+          - "=========================================="
+          - "Peering Connection ID: {{ (_tf_outputs_raw.stdout | from_json).peering_connection_id.value }}"
+          - "Status: {{ (_tf_outputs_raw.stdout | from_json).peering_connection_status.value }}"
+          - "=========================================="
+      when: _tf_outputs_raw.stdout is defined
+
+# ---------------------------------------------------------------------------
+# Destroy
+# ---------------------------------------------------------------------------
+- name: Destroy terraform resources
+  when:
+    - terraform_destroy | default(false)
+    - _state_bucket_available or (terraform_state_bucket | default('') | length == 0)
+  block:
+    - name: Terraform destroy plan
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform plan -destroy -out=tfplan-destroy -input=false -no-color"
+
+    - name: Terraform destroy
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform apply -auto-approve -no-color tfplan-destroy"
+
+    - name: Display destroy completion
+      debug:
+        msg:
+          - "=========================================="
+          - "VPC Peering Resources Destroyed"
+          - "=========================================="

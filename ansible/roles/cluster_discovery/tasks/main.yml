@@ -1,0 +1,243 @@
+---
+# cluster_discovery role
+#
+# Queries a cluster via kubeconfig to discover:
+#   - Cluster infrastructure name (from infrastructure/cluster)
+#   - AWS region
+#   - VPC CIDR (from cm/cluster-config-v1 in kube-system)
+#   - Whether the cluster is HCP (Hosted Control Plane)
+#
+# All values can be overridden with *_override variables (set to non-empty string).
+# Results are stored in the discovered_cluster dict.
+
+- name: "{{ cluster_label }} - Determine what needs to be looked up"
+  set_fact:
+    _need_infra_lookup: "{{ (cluster_name_override | default('') | trim) == '' or (cluster_region_override | default('') | trim) == '' }}"
+    _need_cidr_lookup: "{{ (cluster_vpc_cidr_override | default('') | trim) == '' }}"
+
+- name: "{{ cluster_label }} - Get infrastructure info from cluster"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Infrastructure
+    name: cluster
+    kubeconfig: "{{ kubeconfig }}"
+  register: _infra_info
+  when: _need_infra_lookup | bool
+
+- name: "{{ cluster_label }} - Get cluster-config-v1 configmap"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: cluster-config-v1
+    namespace: kube-system
+    kubeconfig: "{{ kubeconfig }}"
+  register: _cluster_config
+  when: _need_cidr_lookup | bool
+
+- name: "{{ cluster_label }} - Parse install-config from cluster-config-v1"
+  set_fact:
+    _install_config: "{{ _cluster_config.resources[0].data['install-config'] | from_yaml }}"
+  when:
+    - _need_cidr_lookup | bool
+    - _cluster_config.resources is defined
+    - _cluster_config.resources | length > 0
+
+# Resolve each value: use override if provided, otherwise use looked-up value
+- name: "{{ cluster_label }} - Resolve cluster_name"
+  set_fact:
+    _resolved_cluster_name: >-
+      {{ cluster_name_override | default('') | trim
+         if (cluster_name_override | default('') | trim) != ''
+         else _infra_info.resources[0].status.infrastructureName }}
+
+- name: "{{ cluster_label }} - Resolve region"
+  set_fact:
+    _resolved_region: >-
+      {{ cluster_region_override | default('') | trim
+         if (cluster_region_override | default('') | trim) != ''
+         else _infra_info.resources[0].status.platformStatus.aws.region }}
+
+- name: "{{ cluster_label }} - Resolve VPC CIDR"
+  set_fact:
+    _resolved_vpc_cidr: >-
+      {{ cluster_vpc_cidr_override | default('') | trim
+         if (cluster_vpc_cidr_override | default('') | trim) != ''
+         else _install_config.networking.machineNetwork[0].cidr | default('') }}
+
+- name: "{{ cluster_label }} - Resolve infra_name"
+  set_fact:
+    _resolved_infra_name: >-
+      {{ _infra_info.resources[0].status.infrastructureName
+         if (_infra_info is defined and _infra_info.resources is defined and _infra_info.resources | length > 0)
+         else _resolved_cluster_name }}
+
+- name: "{{ cluster_label }} - Resolve is_hcp"
+  set_fact:
+    _resolved_is_hcp: >-
+      {{ _infra_info.resources[0].status.controlPlaneTopology | default('') == 'External'
+         if (_infra_info is defined and _infra_info.resources is defined and _infra_info.resources | length > 0)
+         else false }}
+
+- name: "{{ cluster_label }} - Build discovered_cluster dict"
+  set_fact:
+    discovered_cluster:
+      cluster_name: "{{ _resolved_cluster_name | trim }}"
+      region: "{{ _resolved_region | trim }}"
+      vpc_cidr: "{{ _resolved_vpc_cidr | trim }}"
+      infra_name: "{{ _resolved_infra_name | trim }}"
+      is_hcp: "{{ _resolved_is_hcp | trim }}"
+
+- name: "{{ cluster_label }} - Resolve VPC name"
+  set_fact:
+    discovered_cluster: >-
+      {{ discovered_cluster | combine({
+          'vpc_name': (cluster_vpc_name_override | default('') | trim)
+            if (cluster_vpc_name_override | default('') | trim) != ''
+            else (discovered_cluster.infra_name ~ '-vpc')
+      }) }}
+
+- name: "{{ cluster_label }} - Display resolved values before AWS lookups"
+  debug:
+    msg:
+      - "Cluster Name:  {{ discovered_cluster.cluster_name }}"
+      - "Region:        {{ discovered_cluster.region }}"
+      - "VPC CIDR:      {{ discovered_cluster.vpc_cidr }}"
+      - "VPC Name:      {{ discovered_cluster.vpc_name }}"
+      - "Infra Name:    {{ discovered_cluster.infra_name }}"
+      - "Is HCP:        {{ discovered_cluster.is_hcp }}"
+
+- name: "{{ cluster_label }} - Look up VPC by name"
+  amazon.aws.ec2_vpc_net_info:
+    region: "{{ discovered_cluster.region }}"
+    filters:
+      "tag:Name": "{{ discovered_cluster.vpc_name }}"
+  register: _vpc_lookup
+
+- name: "{{ cluster_label }} - Fall back to cluster tag lookup (HCP)"
+  amazon.aws.ec2_vpc_net_info:
+    region: "{{ discovered_cluster.region }}"
+    filters:
+      "tag:sigs.k8s.io/cluster-api-provider-aws/cluster/{{ discovered_cluster.infra_name }}": owned
+  register: _vpc_lookup_tag
+  when:
+    - discovered_cluster.is_hcp | bool
+    - _vpc_lookup.vpcs | default([]) | length == 0
+
+- name: "{{ cluster_label }} - Set VPC ID"
+  set_fact:
+    discovered_cluster: >-
+      {{ discovered_cluster | combine({
+          'vpc_id': (
+            _vpc_lookup.vpcs[0].vpc_id
+            if (_vpc_lookup.vpcs | default([]) | length > 0)
+            else (
+              _vpc_lookup_tag.vpcs[0].vpc_id
+              if (_vpc_lookup_tag is defined and _vpc_lookup_tag.vpcs | default([]) | length > 0)
+              else ''
+            )
+          )
+      }) }}
+
+- name: "{{ cluster_label }} - Fail if VPC not found"
+  fail:
+    msg: >
+      VPC not found for cluster '{{ discovered_cluster.cluster_name }}'
+      in region {{ discovered_cluster.region }}.
+      VPC name searched: '{{ discovered_cluster.vpc_name }}'.
+      You can override with cluster_vpc_name_override or provide vpc_id directly.
+  when: discovered_cluster.vpc_id | default('') == ''
+
+# Discover subnets (private subnets tagged by the cluster)
+- name: "{{ cluster_label }} - Build subnet filters (standard cluster)"
+  set_fact:
+    _subnet_filters: "{{ _tag_list | items2dict }}"
+  vars:
+    _tag_list:
+      - key: "vpc-id"
+        value: "{{ discovered_cluster.vpc_id }}"
+      - key: "tag:sigs.k8s.io/cluster-api-provider-aws/role"
+        value: "private"
+      - key: "tag:kubernetes.io/cluster/{{ discovered_cluster.infra_name }}"
+        value: "owned"
+      - key: "tag:sigs.k8s.io/cluster-api-provider-aws/cluster/{{ discovered_cluster.infra_name }}"
+        value: "owned"
+  when: not (discovered_cluster.is_hcp | bool)
+
+- name: "{{ cluster_label }} - Build subnet filters (HCP cluster)"
+  set_fact:
+    _subnet_filters: "{{ _tag_list | items2dict }}"
+  vars:
+    _tag_list:
+      - key: "vpc-id"
+        value: "{{ discovered_cluster.vpc_id }}"
+      - key: "tag:kubernetes.io/role/internal-elb"
+        value: "1"
+  when: discovered_cluster.is_hcp | bool
+
+- name: "{{ cluster_label }} - Look up private subnets"
+  amazon.aws.ec2_vpc_subnet_info:
+    region: "{{ discovered_cluster.region }}"
+    filters: "{{ _subnet_filters }}"
+  register: _subnet_lookup
+
+- name: "{{ cluster_label }} - Fail if insufficient subnets"
+  fail:
+    msg: >
+      Need at least 2 private subnets for MULTI_AZ FSx deployment in
+      {{ discovered_cluster.region }}, found {{ _subnet_lookup.subnets | default([]) | length }}.
+  when: _subnet_lookup.subnets | default([]) | length < 2
+
+- name: "{{ cluster_label }} - Set subnet IDs"
+  set_fact:
+    discovered_cluster: >-
+      {{ discovered_cluster | combine({
+          'subnet_ids': _subnet_lookup.subnets | map(attribute='id') | list
+      }) }}
+
+# Discover route tables for those subnets
+- name: "{{ cluster_label }} - Look up route tables"
+  amazon.aws.ec2_vpc_route_table_info:
+    region: "{{ discovered_cluster.region }}"
+    filters:
+      "association.subnet-id": "{{ discovered_cluster.subnet_ids }}"
+      vpc-id: "{{ discovered_cluster.vpc_id }}"
+  register: _rt_lookup
+
+- name: "{{ cluster_label }} - Set route table IDs"
+  set_fact:
+    discovered_cluster: >-
+      {{ discovered_cluster | combine({
+          'route_table_ids': _rt_lookup.route_tables | map(attribute='id') | list | unique
+      }) }}
+
+# Also collect ALL route tables in the VPC (needed for VPC peering routes)
+- name: "{{ cluster_label }} - Look up all VPC route tables"
+  amazon.aws.ec2_vpc_route_table_info:
+    region: "{{ discovered_cluster.region }}"
+    filters:
+      vpc-id: "{{ discovered_cluster.vpc_id }}"
+  register: _all_rt_lookup
+
+- name: "{{ cluster_label }} - Set all route table IDs"
+  set_fact:
+    discovered_cluster: >-
+      {{ discovered_cluster | combine({
+          'all_route_table_ids': _all_rt_lookup.route_tables | map(attribute='id') | list | unique
+      }) }}
+
+- name: "{{ cluster_label }} - Display discovered cluster info"
+  debug:
+    msg:
+      - "=========================================="
+      - "Discovered Cluster: {{ cluster_label }}"
+      - "=========================================="
+      - "  Cluster Name:    {{ discovered_cluster.cluster_name }}"
+      - "  Region:          {{ discovered_cluster.region }}"
+      - "  VPC ID:          {{ discovered_cluster.vpc_id }}"
+      - "  VPC Name:        {{ discovered_cluster.vpc_name }}"
+      - "  VPC CIDR:        {{ discovered_cluster.vpc_cidr }}"
+      - "  HCP Cluster:     {{ discovered_cluster.is_hcp }}"
+      - "  Subnet IDs:      {{ discovered_cluster.subnet_ids }}"
+      - "  Route Table IDs: {{ discovered_cluster.route_table_ids }}"
+      - "  All RT IDs:      {{ discovered_cluster.all_route_table_ids }}"
+      - "=========================================="

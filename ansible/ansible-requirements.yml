@@ -1,0 +1,21 @@
+---
+collections:
+  - name: amazon.aws
+    version: ">=5.0.0"
+  - name: kubernetes.core
+    version: ">=2.4.0"
+
+# Note: This playbook also requires:
+#   - terraform >= 1.0.0 (installed locally)
+#   - python3 packages: boto3, kubernetes
+#   - AWS CLI configured with appropriate credentials
+#   - oc / kubectl with access to both clusters
+#
+# Required AWS permissions:
+#   - fsx:CreateFileSystem, fsx:DescribeFileSystems, fsx:DeleteFileSystem
+#   - fsx:CreateStorageVirtualMachine, fsx:DescribeStorageVirtualMachines
+#   - ec2:CreateSecurityGroup, ec2:AuthorizeSecurityGroupIngress
+#   - ec2:CreateVpcPeeringConnection, ec2:AcceptVpcPeeringConnection
+#   - ec2:CreateRoute, ec2:DescribeRouteTables, ec2:DescribeVpcs
+#   - ec2:DescribeSubnets, ec2:DescribeSecurityGroups
+#   - secretsmanager:CreateSecret, secretsmanager:DescribeSecret

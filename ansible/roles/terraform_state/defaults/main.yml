@@ -1,0 +1,23 @@
+---
+# Defaults for terraform_state role
+
+# Terraform source directory
+terraform_state_tf_source: "{{ playbook_dir }}/../terraform/terraform-state"
+
+# Working directory (uses local state - this is the bootstrap module)
+terraform_state_tf_workdir: "/tmp/netapp-dr-terraform/terraform-state"
+
+# Container configuration
+container_runtime: "podman"
+terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
+
+# S3 bucket name (read from values-trident.yaml by playbook)
+# terraform_state_bucket: ""
+
+# DynamoDB table name
+terraform_state_dynamodb_table: "terraform-state-lock"
+
+# Tags
+tags:
+  ManagedBy: "Terraform"
+  Purpose: "Terraform-State-Backend"

@@ -1,0 +1,504 @@
+---
+# =============================================================================
+# NetApp DR Starter Kit - Main Playbook
+# =============================================================================
+#
+# This playbook orchestrates the complete DR infrastructure setup:
+#   0. Reads values-trident.yaml for the terraform state bucket name
+#   1. Discovers prod and DR cluster info (names, regions, VPC CIDRs)
+#   2. Creates S3 bucket + DynamoDB table for Terraform remote state
+#   3. Peers the VPCs of the two clusters
+#   4. Creates FSx for NetApp ONTAP filesystems in each region
+#
+# The FSx filesystems are named: <cluster_name>-<region>-fsx
+# and are intended for use with Trident / Trident Protect for DR replication.
+#
+# Usage:
+#   ansible-playbook ansible/dr-setup.yaml \
+#     -e @ansible/dr-vars.yml \
+#     -e prod_kubeconfig=/path/to/prod/kubeconfig \
+#     -e dr_kubeconfig=/path/to/dr/kubeconfig
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Play 1: Load values-trident.yaml and Discover Production Cluster
+# -----------------------------------------------------------------------------
+- name: Discover Production Cluster
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Load values-trident.yaml
+      set_fact:
+        _values_trident: "{{ lookup('file', playbook_dir ~ '/../values-trident.yaml') | from_yaml }}"
+
+    - name: Set terraform state bucket from values-trident.yaml
+      set_fact:
+        terraform_state_bucket: "{{ terraform_state_bucket | default(_values_trident.terraform.state.bucket) }}"
+        cacheable: true
+
+    - name: Display state bucket
+      debug:
+        msg: "Terraform state bucket (from values-trident.yaml): {{ terraform_state_bucket }}"
+
+    - name: Validate prod_kubeconfig is provided
+      fail:
+        msg: "prod_kubeconfig is required. Pass it via -e prod_kubeconfig=/path/to/kubeconfig"
+      when: prod_kubeconfig is not defined or prod_kubeconfig == ''
+
+    - name: Discover production cluster
+      include_role:
+        name: cluster_discovery
+      vars:
+        kubeconfig: "{{ prod_kubeconfig }}"
+        cluster_label: "Production"
+        cluster_name_override: "{{ prod_cluster_name_override | default('') }}"
+        cluster_region_override: "{{ prod_region_override | default('') }}"
+        cluster_vpc_cidr_override: "{{ prod_vpc_cidr_override | default('') }}"
+        cluster_vpc_name_override: "{{ prod_vpc_name_override | default('') }}"
+
+    - name: Store production cluster info
+      set_fact:
+        prod_cluster: "{{ discovered_cluster }}"
+        cacheable: true
+
+# -----------------------------------------------------------------------------
+# Play 2: Discover DR Cluster
+# -----------------------------------------------------------------------------
+- name: Discover DR Cluster
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Validate dr_kubeconfig is provided
+      fail:
+        msg: "dr_kubeconfig is required. Pass it via -e dr_kubeconfig=/path/to/kubeconfig"
+      when: dr_kubeconfig is not defined or dr_kubeconfig == ''
+
+    - name: Discover DR cluster
+      include_role:
+        name: cluster_discovery
+      vars:
+        kubeconfig: "{{ dr_kubeconfig }}"
+        cluster_label: "DR"
+        cluster_name_override: "{{ dr_cluster_name_override | default('') }}"
+        cluster_region_override: "{{ dr_region_override | default('') }}"
+        cluster_vpc_cidr_override: "{{ dr_vpc_cidr_override | default('') }}"
+        cluster_vpc_name_override: "{{ dr_vpc_name_override | default('') }}"
+
+    - name: Store DR cluster info
+      set_fact:
+        dr_cluster: "{{ discovered_cluster }}"
+        cacheable: true
+
+# -----------------------------------------------------------------------------
+# Play 3: Bootstrap Terraform State Backend (S3 + DynamoDB)
+#   Only runs on create — destroy is handled separately via
+#   "make destroy-terraform-state" to prevent accidental deletion.
+# -----------------------------------------------------------------------------
+- name: Create Terraform State Backend
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip state backend creation if destroying
+      meta: end_play
+      when: destroy_resources | default(false)
+
+    - name: Create S3 bucket and DynamoDB table for Terraform state
+      include_role:
+        name: terraform_state
+      vars:
+        terraform_state_region: "{{ prod_cluster.region }}"
+
+# -----------------------------------------------------------------------------
+# Play 4: VPC Peering (create only — destroy is in the destroy sequence)
+# -----------------------------------------------------------------------------
+- name: Peer VPCs between Production and DR
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip VPC peering if destroying
+      meta: end_play
+      when: destroy_resources | default(false)
+
+    - name: Display peering summary
+      debug:
+        msg:
+          - "=========================================="
+          - "VPC Peering Setup"
+          - "=========================================="
+          - "Prod: {{ prod_cluster.cluster_name }} in {{ prod_cluster.region }} ({{ prod_cluster.vpc_cidr }})"
+          - "DR:   {{ dr_cluster.cluster_name }} in {{ dr_cluster.region }} ({{ dr_cluster.vpc_cidr }})"
+          - "=========================================="
+
+    - name: Peer VPCs via Terraform
+      include_role:
+        name: vpc_peering_terraform
+
+# -----------------------------------------------------------------------------
+# Play 5: Create FSx ONTAP in Both Regions (parallel)
+#
+# FSx creation takes 20-40 minutes. Both filesystems are independent, so
+# we prepare both (setup, init, plan) sequentially, then fire both applies
+# in parallel using async, cutting total wall-clock time roughly in half.
+# -----------------------------------------------------------------------------
+- name: Create FSx ONTAP Filesystems (parallel)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip FSx creation if destroy is requested
+      meta: end_play
+      when: destroy_resources | default(false)
+
+    # --- Load FSx password ---
+    - name: Load FSx password from ~/.fsx file
+      block:
+        - name: Check if ~/.fsx file exists
+          stat:
+            path: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_stat
+
+        - name: Read password from ~/.fsx file
+          slurp:
+            src: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_content
+          when: _fsx_file_stat.stat.exists | default(false)
+
+        - name: Set password from ~/.fsx file
+          set_fact:
+            fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
+            svm_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
+          when:
+            - _fsx_file_stat.stat.exists | default(false)
+            - _fsx_file_content.content is defined
+            - fsx_admin_password is not defined or fsx_admin_password == ''
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
+
+    - name: Validate FSx password is set
+      fail:
+        msg: |
+          fsx_admin_password is required but not found.
+          Please either:
+            1. Create ~/.fsx file with the password: echo "MyPassword" > ~/.fsx && chmod 600 ~/.fsx
+            2. Pass via command line: -e fsx_admin_password=MyPassword
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
+
+    # --- Prepare Production FSx (setup, init, plan) ---
+    - name: Prepare Production FSx ONTAP
+      include_role:
+        name: fsx_ontap_terraform
+      vars:
+        cluster_info: "{{ prod_cluster }}"
+        fsx_label: "Production FSx"
+        file_system_name_override: "{{ prod_file_system_name | default('') }}"
+        terraform_state_region: "{{ prod_cluster.region }}"
+        allowed_cidrs:
+          - "{{ prod_cluster.vpc_cidr }}"
+          - "{{ dr_cluster.vpc_cidr }}"
+        fsx_prepare_only: true
+
+    - name: Save Production FSx prepared state
+      set_fact:
+        _prod_fsx_prepared: "{{ fsx_prepared }}"
+
+    # --- Prepare DR FSx (setup, init, plan) ---
+    - name: Prepare DR FSx ONTAP
+      include_role:
+        name: fsx_ontap_terraform
+      vars:
+        cluster_info: "{{ dr_cluster }}"
+        fsx_label: "DR FSx"
+        file_system_name_override: "{{ dr_file_system_name | default('') }}"
+        terraform_state_region: "{{ prod_cluster.region }}"
+        allowed_cidrs:
+          - "{{ dr_cluster.vpc_cidr }}"
+          - "{{ prod_cluster.vpc_cidr }}"
+        fsx_prepare_only: true
+
+    - name: Save DR FSx prepared state
+      set_fact:
+        _dr_fsx_prepared: "{{ fsx_prepared }}"
+
+    # --- Apply both in parallel ---
+    - name: Display parallel apply notice
+      debug:
+        msg:
+          - "=========================================="
+          - "Applying FSx ONTAP in PARALLEL"
+          - "=========================================="
+          - "  Production: {{ _prod_fsx_prepared.file_system_name }}"
+          - "  DR:         {{ _dr_fsx_prepared.file_system_name }}"
+          - "  This may take 20-40 minutes..."
+          - "=========================================="
+
+    - name: Apply FSx ONTAP - Production (async)
+      ansible.builtin.shell: "{{ _prod_fsx_prepared.apply_cmd }}"
+      async: 3600
+      poll: 0
+      register: _prod_fsx_job
+      when: not (_prod_fsx_prepared.skipped | default(false))
+
+    - name: Apply FSx ONTAP - DR (async)
+      ansible.builtin.shell: "{{ _dr_fsx_prepared.apply_cmd }}"
+      async: 3600
+      poll: 0
+      register: _dr_fsx_job
+      when: not (_dr_fsx_prepared.skipped | default(false))
+
+    # --- Wait for both to complete ---
+    - name: Wait for Production FSx apply to complete
+      ansible.builtin.async_status:
+        jid: "{{ _prod_fsx_job.ansible_job_id }}"
+      register: _prod_fsx_apply
+      until: _prod_fsx_apply.finished
+      retries: 120
+      delay: 30
+      when: not (_prod_fsx_prepared.skipped | default(false))
+
+    - name: Wait for DR FSx apply to complete
+      ansible.builtin.async_status:
+        jid: "{{ _dr_fsx_job.ansible_job_id }}"
+      register: _dr_fsx_apply
+      until: _dr_fsx_apply.finished
+      retries: 120
+      delay: 30
+      when: not (_dr_fsx_prepared.skipped | default(false))
+
+    # --- Get outputs ---
+    - name: Get Production FSx outputs
+      ansible.builtin.shell: "{{ _prod_fsx_prepared.output_cmd }}"
+      register: _prod_fsx_outputs_raw
+      changed_when: false
+      when: not (_prod_fsx_prepared.skipped | default(false))
+
+    - name: Get DR FSx outputs
+      ansible.builtin.shell: "{{ _dr_fsx_prepared.output_cmd }}"
+      register: _dr_fsx_outputs_raw
+      changed_when: false
+      when: not (_dr_fsx_prepared.skipped | default(false))
+
+    # --- Store results ---
+    - name: Store Production FSx result
+      set_fact:
+        prod_fsx:
+          file_system_id: "{{ (_prod_fsx_outputs_raw.stdout | from_json).file_system_id.value }}"
+          file_system_dns_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).file_system_dns_name.value }}"
+          svm_id: "{{ (_prod_fsx_outputs_raw.stdout | from_json).svm_id.value }}"
+          svm_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).svm_name.value }}"
+          svm_mgmt_dns_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).svm_management_endpoint_dns_name.value | default('') }}"
+          intercluster_dns_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_dns_name.value | default('') }}"
+          intercluster_ips: "{{ (_prod_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_ip_addresses.value | default([]) }}"
+          security_group_id: "{{ (_prod_fsx_outputs_raw.stdout | from_json).security_group_id.value }}"
+          file_system_name: "{{ _prod_fsx_prepared.file_system_name }}"
+        cacheable: true
+      when: not (_prod_fsx_prepared.skipped | default(false))
+
+    - name: Store DR FSx result
+      set_fact:
+        dr_fsx:
+          file_system_id: "{{ (_dr_fsx_outputs_raw.stdout | from_json).file_system_id.value }}"
+          file_system_dns_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).file_system_dns_name.value }}"
+          svm_id: "{{ (_dr_fsx_outputs_raw.stdout | from_json).svm_id.value }}"
+          svm_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).svm_name.value }}"
+          svm_mgmt_dns_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).svm_management_endpoint_dns_name.value | default('') }}"
+          intercluster_dns_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_dns_name.value | default('') }}"
+          intercluster_ips: "{{ (_dr_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_ip_addresses.value | default([]) }}"
+          security_group_id: "{{ (_dr_fsx_outputs_raw.stdout | from_json).security_group_id.value }}"
+          file_system_name: "{{ _dr_fsx_prepared.file_system_name }}"
+        cacheable: true
+      when: not (_dr_fsx_prepared.skipped | default(false))
+
+# -----------------------------------------------------------------------------
+# Play 7: Summary
+# -----------------------------------------------------------------------------
+- name: DR Infrastructure Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip summary if destroy was requested
+      meta: end_play
+      when: destroy_resources | default(false)
+
+    - name: Display complete DR infrastructure summary
+      debug:
+        msg:
+          - "============================================================"
+          - "  NetApp DR Infrastructure - Setup Complete"
+          - "============================================================"
+          - ""
+          - "  TERRAFORM STATE"
+          - "    S3 Bucket:   {{ terraform_state_bucket }}"
+          - "    DynamoDB:    {{ terraform_state_dynamodb_table | default('terraform-state-lock') }}"
+          - ""
+          - "  PRODUCTION CLUSTER"
+          - "    Cluster:     {{ prod_cluster.cluster_name }}"
+          - "    Region:      {{ prod_cluster.region }}"
+          - "    VPC:         {{ prod_cluster.vpc_id }} ({{ prod_cluster.vpc_cidr }})"
+          - "    FSx Name:    {{ prod_fsx.file_system_name }}"
+          - "    FSx ID:      {{ prod_fsx.file_system_id }}"
+          - "    SVM Mgmt:    {{ prod_fsx.svm_mgmt_dns_name }}"
+          - "    Intercluster: {{ prod_fsx.intercluster_dns_name }}"
+          - ""
+          - "  DR CLUSTER"
+          - "    Cluster:     {{ dr_cluster.cluster_name }}"
+          - "    Region:      {{ dr_cluster.region }}"
+          - "    VPC:         {{ dr_cluster.vpc_id }} ({{ dr_cluster.vpc_cidr }})"
+          - "    FSx Name:    {{ dr_fsx.file_system_name }}"
+          - "    FSx ID:      {{ dr_fsx.file_system_id }}"
+          - "    SVM Mgmt:    {{ dr_fsx.svm_mgmt_dns_name }}"
+          - "    Intercluster: {{ dr_fsx.intercluster_dns_name }}"
+          - ""
+          - "  NEXT STEPS"
+          - "    1. Configure Trident backends on both clusters using"
+          - "       the SVM management DNS names above"
+          - "    2. Configure Trident Protect AppMirrorRelationships"
+          - "       for cross-region DR replication"
+          - "    3. The FSx intercluster endpoints above are used by"
+          - "       SnapMirror for data replication between the"
+          - "       ONTAP filesystems"
+          - "============================================================"
+
+# -----------------------------------------------------------------------------
+# Destroy Plays (only run when destroy_resources=true)
+#
+# Order matters — reverse of creation:
+#   1. FSx filesystems (both regions)
+#   2. VPC peering
+#
+# Note: The Terraform state backend (S3 + DynamoDB) is NOT destroyed here.
+# Use "make destroy-terraform-state" separately if you want to remove it.
+# -----------------------------------------------------------------------------
+- name: Destroy FSx ONTAP Filesystems (parallel)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip if not destroying
+      meta: end_play
+      when: not (destroy_resources | default(false))
+
+    # --- Prepare Production FSx destroy (init, plan) ---
+    - name: Prepare Production FSx destroy
+      include_role:
+        name: fsx_ontap_terraform
+      vars:
+        cluster_info: "{{ prod_cluster }}"
+        fsx_label: "Production FSx"
+        file_system_name_override: "{{ prod_file_system_name | default('') }}"
+        terraform_state_region: "{{ prod_cluster.region }}"
+        allowed_cidrs:
+          - "{{ prod_cluster.vpc_cidr }}"
+          - "{{ dr_cluster.vpc_cidr }}"
+        terraform_destroy: true
+        fsx_prepare_only: true
+
+    - name: Save Production FSx destroy prepared state
+      set_fact:
+        _prod_fsx_prepared: "{{ fsx_prepared }}"
+
+    # --- Prepare DR FSx destroy (init, plan) ---
+    - name: Prepare DR FSx destroy
+      include_role:
+        name: fsx_ontap_terraform
+      vars:
+        cluster_info: "{{ dr_cluster }}"
+        fsx_label: "DR FSx"
+        file_system_name_override: "{{ dr_file_system_name | default('') }}"
+        terraform_state_region: "{{ prod_cluster.region }}"
+        allowed_cidrs:
+          - "{{ dr_cluster.vpc_cidr }}"
+          - "{{ prod_cluster.vpc_cidr }}"
+        terraform_destroy: true
+        fsx_prepare_only: true
+
+    - name: Save DR FSx destroy prepared state
+      set_fact:
+        _dr_fsx_prepared: "{{ fsx_prepared }}"
+
+    # --- Destroy both in parallel ---
+    - name: Display parallel destroy notice
+      debug:
+        msg:
+          - "=========================================="
+          - "Destroying FSx ONTAP in PARALLEL"
+          - "=========================================="
+          - "  Production: {{ _prod_fsx_prepared.file_system_name }}"
+          - "  DR:         {{ _dr_fsx_prepared.file_system_name }}"
+          - "=========================================="
+
+    - name: Destroy FSx ONTAP - Production (async)
+      ansible.builtin.shell: "{{ _prod_fsx_prepared.apply_cmd }}"
+      async: 3600
+      poll: 0
+      register: _prod_fsx_destroy_job
+      when: not (_prod_fsx_prepared.skipped | default(false))
+
+    - name: Destroy FSx ONTAP - DR (async)
+      ansible.builtin.shell: "{{ _dr_fsx_prepared.apply_cmd }}"
+      async: 3600
+      poll: 0
+      register: _dr_fsx_destroy_job
+      when: not (_dr_fsx_prepared.skipped | default(false))
+
+    # --- Wait for both to complete ---
+    - name: Wait for Production FSx destroy to complete
+      ansible.builtin.async_status:
+        jid: "{{ _prod_fsx_destroy_job.ansible_job_id }}"
+      register: _prod_fsx_destroy
+      until: _prod_fsx_destroy.finished
+      retries: 120
+      delay: 30
+      when: not (_prod_fsx_prepared.skipped | default(false))
+
+    - name: Wait for DR FSx destroy to complete
+      ansible.builtin.async_status:
+        jid: "{{ _dr_fsx_destroy_job.ansible_job_id }}"
+      register: _dr_fsx_destroy
+      until: _dr_fsx_destroy.finished
+      retries: 120
+      delay: 30
+      when: not (_dr_fsx_prepared.skipped | default(false))
+
+    - name: Display FSx destroy completion
+      debug:
+        msg:
+          - "=========================================="
+          - "FSx ONTAP Filesystems Destroyed"
+          - "  Production: {{ _prod_fsx_prepared.file_system_name }}"
+          - "  DR:         {{ _dr_fsx_prepared.file_system_name }}"
+          - "=========================================="
+
+- name: Destroy VPC Peering
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip if not destroying
+      meta: end_play
+      when: not (destroy_resources | default(false))
+
+    - name: Destroy VPC peering via Terraform
+      include_role:
+        name: vpc_peering_terraform
+      vars:
+        terraform_destroy: true
+
+- name: Destruction Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip if not destroying
+      meta: end_play
+      when: not (destroy_resources | default(false))
+
+    - name: Display destruction summary
+      debug:
+        msg:
+          - "============================================================"
+          - "  NetApp DR Infrastructure - Destruction Complete"
+          - "============================================================"
+          - "  Production FSx: Destroyed"
+          - "  DR FSx: Destroyed"
+          - "  VPC Peering: Destroyed"
+          - "  Terraform State: {{ terraform_state_bucket }} (PRESERVED)"
+          - ""
+          - "  To also destroy the state backend:"
+          - "    make destroy-terraform-state"
+          - "============================================================"
