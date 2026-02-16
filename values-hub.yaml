@@ -1,22 +1,51 @@
 clusterGroup:
   name: hub
+  argoCD:
+    resourceHealthChecks: 
+    - kind: TridentOrchestrator
+      group: trident.netapp.io
+      check: |
+        hs = {}
+        if obj.status ~= nil and obj.status.status ~= nil then
+          if obj.status.status == "Installed" then
+            hs.status = "Healthy"
+            hs.message = "Trident installation completed successfully."
+          elseif obj.status.status == "Installing" then
+            hs.status = "Progressing"
+            hs.message = "Trident is currently installing."
+          elseif obj.status.status == "Updating" then
+            hs.status = "Progressing"
+            hs.message = "Trident is currently updating."
+          elseif obj.status.status == "Failed" then
+            hs.status = "Degraded"
+            hs.message = "Trident installation failed. Check operator logs."
+          else
+            hs.status = "Progressing"
+            hs.message = "Trident status unknown or pending."
+          end
+        else
+          hs.status = "Progressing"
+          hs.message = "Awaiting TridentOrchestrator status."
+        end
+        return hs
+
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     open-cluster-management:
     vault:
     golang-external-secrets:
-    config-demo:
-    hello-world:
+    trident:
+    trident-protect:
+    openshift-cnv:
   subscriptions:
     acm:
       name: advanced-cluster-management
       namespace: open-cluster-management
-      channel: release-2.14
+      channel: release-2.15
       # csv: advanced-cluster-management.v2.6.1
   argoProjects:
     - hub
-    - config-demo
-    - hello-world
+    - trident
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
   # We can use self-referential variables because the chart calls the tpl function with these variables defined
   sharedValueFiles:
@@ -57,16 +86,35 @@ clusterGroup:
       argoProject: hub
       chart: golang-external-secrets
       chartVersion: 0.1.*
-    config-demo:
-      name: config-demo
-      namespace: config-demo
-      argoProject: config-demo
-      path: charts/all/config-demo
-    hello-world:
-      name: hello-world
-      namespace: hello-world
-      argoProject: hello-world
-      path: charts/all/hello-world
+    trident:
+      name: trident
+      namespace: trident
+      path: charts/all/trident
+      argoProject: trident
+    protect:
+      name: trident-protect
+      namespace: trident-protect
+      argoProject: trident
+      chart: trident-protect
+      repoURL: https://netapp.github.io/trident-protect-helm-chart
+      chartVersion: 100.2510.0
+      ignoreDifferences:
+      - group: ""
+        kind: Secret
+        name: tp-webhook-tls
+        jqPathExpressions:
+        - .data
+      - group: admissionregistration.k8s.io
+        kind: ValidatingWebhookConfiguration
+        name: trident-protect-validating-webhook-configurations
+        jqPathExpressions:
+        - '.webhooks[].clientConfig.caBundle'
+    protect-config:
+      name: trident-protect-config
+      namespace: trident-protect
+      argoProject: trident
+      path: charts/all/trident-protect-config
+
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
@@ -83,10 +131,10 @@ clusterGroup:
         # verbosity: "-v"
   managedClusterGroups:
     exampleRegion:
-      name: group-one
+      name: secondary
       acmlabels:
         - name: clusterGroup
-          value: group-one
+          value: secondary
       # helmOverrides:
       #   - name: foo
       #     value: bar

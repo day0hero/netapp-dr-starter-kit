@@ -1,16 +1,12 @@
 clusterGroup:
-  name: group-one
+  name: secondary
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
-    config-demo:
-    hello-world:
     golang-external-secrets:
   # The only subscription on spokes is gitops which gets managed by ACM
   # subscriptions:
   argoProjects:
     - eso
-    - config-demo
-    - hello-world
   applications:
     golang-external-secrets:
       name: golang-external-secrets
@@ -18,16 +14,6 @@ clusterGroup:
       argoProject: eso
       chart: golang-external-secrets
       chartVersion: 0.1.*
-    config-demo:
-      name: config-demo
-      namespace: config-demo
-      argoProject: config-demo
-      path: charts/all/config-demo
-    hello-world:
-      name: hello-world
-      namespace: hello-world
-      argoProject: hello-world
-      path: charts/all/hello-world
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
