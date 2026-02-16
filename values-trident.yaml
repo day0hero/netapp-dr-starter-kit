@@ -1,0 +1,60 @@
+# Terraform state bucket configuration
+terraform:
+  state:
+    bucket: patterns-terraform-state
+    region: us-west-1
+    dynamodb_table: terraform-state-lock
+
+tridentFSX:
+  iscsi:
+    mgmtLIF: svm-087bb6998bedbb8c5.fs-02cf9e68896ff916e.fsx.us-west-1.amazonaws.com
+    svm: SVM1
+
+# Trident Protect configuration
+tridentProtect:
+  appVault:
+    enabled: true
+    name: aws-s3-appvault
+    providerType: AWS
+    credentials:
+      vaultPath: secret/data/hub/aws
+      secretName: trident-protect-s3-creds
+    s3:
+      endpoint: https://s3.us-west-1.amazonaws.com
+      bucketName: trident-protect-bucket
+
+  # Applications to protect - add namespaces here
+  applications:
+    # Example: protect OpenShift Virtualization VMs
+    # - name: virtual-machines
+    #   namespaces:
+    #     - name: openshift-cnv
+    #     - name: vm-workloads
+
+  # AppMirrorRelationships for DR replication
+  # NOTE: sourceApplicationUID must be set after Application CR is created
+  appMirrorRelationships:
+    # Example:
+    # - name: vm-mirror
+    #   sourceAppVaultRef: aws-s3-appvault
+    #   destinationAppVaultRef: aws-s3-appvault
+    #   sourceApplicationName: virtual-machines
+    #   sourceApplicationUID: ""  # oc get application virtual-machines -n trident-protect -o jsonpath='{.metadata.uid}'
+    #   recurrenceRule: "DTSTART:20240101T000000Z\nRRULE:FREQ=HOURLY;INTERVAL=1"
+
+  # Backup schedules
+  schedules:
+    # Example:
+    # - name: vm-hourly
+    #   applicationRef: virtual-machines
+    #   appVaultRef: aws-s3-appvault
+    #   granularity: Hourly
+    #   minute: "0"
+    #   snapshotRetention: "24"
+    #   backupRetention: "7"
+
+  # On-demand snapshots (empty by default - use schedules for automation)
+  snapshots: []
+
+  # On-demand backups (empty by default - use schedules for automation)
+  backups: []
