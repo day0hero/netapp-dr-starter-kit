@@ -1,0 +1,34 @@
+{{- if .Values.tridentProtect.appVault.enabled }}
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: eso-trident-protect-s3
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  secretStoreRef:
+    name: {{ .Values.secretStoreRef.name }}
+    kind: {{ .Values.secretStoreRef.kind }}
+{{- with .Values.tridentProtect.appVault }}
+  target:
+    name: {{ .credentials.secretName }}
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        accessKeyID: |-
+          {{ "{{ .accessKeyID }}" }}
+        secretAccessKey: |-
+          {{ "{{ .secretAccessKey }}" }}
+  data:
+    - secretKey: accessKeyID
+      remoteRef:
+        key: {{ .credentials.vaultPath }}
+        property: accessKeyID
+    - secretKey: secretAccessKey
+      remoteRef:
+        key: {{ .credentials.vaultPath }}
+        property: secretAccessKey
+{{- end }}
+{{- end }}

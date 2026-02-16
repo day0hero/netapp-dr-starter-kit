@@ -1,0 +1,32 @@
+{{- if .Values.tridentProtect.appVault.enabled }}
+apiVersion: protect.trident.netapp.io/v1
+kind: AppVault
+metadata:
+  name: {{ .Values.tridentProtect.appVault.name }}
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  providerType: {{ .Values.tridentProtect.appVault.providerType }}
+  providerConfig:
+{{- with .Values.tridentProtect.appVault.s3 }}
+    s3:
+      endpoint: {{ .endpoint | quote }}
+      bucketName: {{ .bucketName | quote }}
+      {{- if hasKey . "secure" }}
+      secure: {{ .secure | quote }}
+      {{- end }}
+      {{- if hasKey . "skipCertValidation" }}
+      skipCertValidation: {{ .skipCertValidation | quote }}
+      {{- end }}
+{{- end }}
+  providerCredentials:
+    accessKeyID:
+      valueFromSecret:
+        key: accessKeyID
+        name: {{ .Values.tridentProtect.appVault.credentials.secretName }}
+    secretAccessKey:
+      valueFromSecret:
+        key: secretAccessKey
+        name: {{ .Values.tridentProtect.appVault.credentials.secretName }}
+{{- end }}

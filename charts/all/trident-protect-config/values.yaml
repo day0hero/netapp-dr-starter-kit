@@ -1,0 +1,103 @@
+# Default values for trident-protect-config
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# ExternalSecret Configuration
+secretStoreRef:
+  name: vault-backend
+  kind: ClusterSecretStore
+
+# Trident Protect AppVault configuration
+tridentProtect:
+  # AppVault for S3-compatible storage (AWS S3, ONTAP-S3, etc.)
+  appVault:
+    enabled: true
+    name: aws-s3-appvault
+    # Type: AWS, Azure, GCP, S3, ONTAP-S3, StorageGRID-S3, Generic-S3
+    providerType: AWS
+    # Credentials from Vault
+    credentials:
+      # Vault path for ExternalSecret
+      vaultPath: secret/data/hub/aws
+      secretName: trident-protect-s3-creds
+    # S3 configuration (used for all S3-compatible providers including AWS)
+    s3:
+      # AWS S3 endpoint format: https://s3.<region>.amazonaws.com
+      endpoint: https://s3.us-west-1.amazonaws.com
+      bucketName: ocpvdr-trident-protect
+
+  # Applications to protect
+  # Each application can include one or more namespaces
+  applications: []
+  # Example:
+  # applications:
+  #   - name: my-app
+  #     namespaces:
+  #       - name: my-app-namespace
+  #       - name: my-app-database
+  #         labelSelector:
+  #           matchLabels:
+  #             app: postgres
+  #   - name: another-app
+  #     namespaces:
+  #       - name: another-namespace
+
+  # AppMirrorRelationships for DR replication
+  # NOTE: sourceApplicationUID must be populated after the Application CR is created
+  # Get it with: oc get application <name> -n trident-protect -o jsonpath='{.metadata.uid}'
+  appMirrorRelationships: []
+  # Example:
+  # appMirrorRelationships:
+  #   - name: my-app-mirror
+  #     desiredState: Established  # Established or Promoted
+  #     sourceAppVaultRef: aws-s3-appvault
+  #     destinationAppVaultRef: aws-s3-appvault-dr
+  #     sourceApplicationName: my-app
+  #     sourceApplicationUID: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"  # Required - get from Application CR
+  #     recurrenceRule: "DTSTART:20240101T000000Z\nRRULE:FREQ=HOURLY;INTERVAL=1"
+  #     storageClassName: trident-csi  # Optional
+  #     namespaceMapping:  # Optional - map source to destination namespaces
+  #       - source: my-app-namespace
+  #         destination: my-app-namespace-dr
+
+  # Schedules for automated snapshots and backups
+  schedules: []
+  # Example:
+  # schedules:
+  #   - name: my-app-hourly
+  #     applicationRef: my-app
+  #     appVaultRef: aws-s3-appvault
+  #     granularity: Hourly  # Hourly, Daily, Weekly, Monthly, Custom
+  #     minute: "0"
+  #     snapshotRetention: "24"  # Keep 24 snapshots
+  #     backupRetention: "7"     # Keep 7 backups
+  #     enabled: true
+  #   - name: my-app-daily
+  #     applicationRef: my-app
+  #     appVaultRef: aws-s3-appvault
+  #     granularity: Daily
+  #     hour: "2"
+  #     minute: "0"
+  #     snapshotRetention: "7"
+  #     backupRetention: "30"
+  #     dataMover: Kopia  # Kopia (default), Restic, CBS
+
+  # On-demand snapshots (typically not used in GitOps - use schedules instead)
+  snapshots: []
+  # Example:
+  # snapshots:
+  #   - name: my-app-snapshot-manual
+  #     applicationRef: my-app
+  #     appVaultRef: aws-s3-appvault
+  #     reclaimPolicy: Retain  # Delete (default), Retain
+
+  # On-demand backups (typically not used in GitOps - use schedules instead)
+  backups: []
+  # Example:
+  # backups:
+  #   - name: my-app-backup-manual
+  #     applicationRef: my-app
+  #     appVaultRef: aws-s3-appvault
+  #     dataMover: Kopia  # Kopia (default), Restic
+  #     reclaimPolicy: Retain  # Retain (default), Delete
+  #     snapshotRef: my-app-snapshot-manual  # Optional - use existing snapshot

@@ -1,0 +1,31 @@
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: eso-trident-iscsi-svm
+  namespace: trident
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  secretStoreRef:
+    name: {{ .Values.secretStoreRef.name }}
+    kind: {{ .Values.secretStoreRef.kind }}
+{{- with .Values.tridentFSX }}
+  target:
+    name: {{ .iscsi.secretName }}
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      mergePolicy: Merge
+      data:
+        password: |-
+          {{ "{{ .password | trim }}" }}
+  data:
+    - secretKey: username
+      remoteRef:
+        key: {{ .iscsi.key }}
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: {{ .iscsi.key }}
+        property: content
+{{- end }}

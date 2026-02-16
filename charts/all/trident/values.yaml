@@ -1,0 +1,23 @@
+# Default values for trident
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# ExternalSecret Configuration
+secretStoreRef:
+  name: vault-backend
+  kind: ClusterSecretStore
+
+# Maps to $gitroot/values-secret.yaml-template declaration
+tridentFSX:
+  iscsi:
+    key: secret/data/global/fsx-admin
+    secretName: trident-ontap-iscsi-svm
+    storagePrefix: trident_iscsi
+    lunsPerFlexvol: 100
+    mgmtLIF: "" # Example LIF address: management.fs-1877692518d2cc2b8.fsx.us-west-1.amazonaws.com
+    storageDriverName: ontap-san
+    svm: fsx
+  storageClass:
+    name: trident-csi-iscsi
+    backendType: ontap-san
+    fsType: ext4

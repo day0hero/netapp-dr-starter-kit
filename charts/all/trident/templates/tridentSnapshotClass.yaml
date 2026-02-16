@@ -1,0 +1,10 @@
+{{- with .Values.tridentFSX }}
+{{- if and .iscsi.mgmtLIF (not (contains "PROVIDE" .iscsi.mgmtLIF)) }}
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: csi-trident-vsc
+driver: csi.trident.netapp.io
+deletionPolicy: Delete
+{{- end }}
+{{- end }}

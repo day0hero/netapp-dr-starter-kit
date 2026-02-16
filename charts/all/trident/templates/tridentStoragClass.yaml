@@ -1,0 +1,16 @@
+{{- with .Values.tridentFSX }}
+{{- if and .iscsi.mgmtLIF (not (contains "PROVIDE" .iscsi.mgmtLIF)) }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: trident-csi
+provisioner: csi.trident.netapp.io
+parameters:
+  backendType: {{ .storageClass.backendType }}
+  provisioningType: {{ default "thin" .storageClass.provisioningType | quote }}
+  fsType: {{ .storageClass.fsType | quote }}
+allowVolumeExpansion: {{ default true .storageClass.allowVolumeExpansion }}
+volumeBindingMode: {{ default "Immediate" .storageClass.volumeBindingMode }}
+reclaimPolicy: {{ default "Delete" .storageClass.reclaimPolicy }}
+{{- end }}
+{{- end }}
