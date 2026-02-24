@@ -100,7 +100,6 @@ clusterGroup:
       argoProject: trident
     protect:
       name: trident-protect
-      disabled: true
       namespace: trident-protect
       argoProject: trident
       chart: trident-protect
