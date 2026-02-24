@@ -109,6 +109,43 @@ destroy-dr: ## Destroy DR infrastructure (FSx filesystems and VPC peering; prese
 		$(_DR_EXTRA_VARS) \
 		-e destroy_resources=true
 
+# Trident Protect AppVault S3 bucket from values-global.yaml
+_APPVAULT_BUCKET := $(shell yq '.global.tridentProtect.appVault.s3.bucketName // ""' values-global.yaml 2>/dev/null)
+_APPVAULT_REGION := $(shell yq '.global.tridentProtect.appVault.s3.region // ""' values-global.yaml 2>/dev/null)
+
+.PHONY: create-appvault-bucket
+create-appvault-bucket: ## Create the S3 bucket for Trident Protect AppVault
+	@if [ -z "$(_APPVAULT_BUCKET)" ]; then \
+		echo "Error: Could not read .global.tridentProtect.appVault.s3.bucketName from values-global.yaml"; \
+		exit 1; \
+	fi
+	@if [ -z "$(_APPVAULT_REGION)" ]; then \
+		echo "Error: Could not read .global.tridentProtect.appVault.s3.region from values-global.yaml"; \
+		exit 1; \
+	fi
+	@echo "=========================================="
+	@echo "Trident Protect AppVault S3 Bucket"
+	@echo "=========================================="
+	@echo "  Bucket: $(_APPVAULT_BUCKET)"
+	@echo "  Region: $(_APPVAULT_REGION)"
+	@echo "=========================================="
+	@if aws s3api head-bucket --bucket $(_APPVAULT_BUCKET) --region $(_APPVAULT_REGION) 2>/dev/null; then \
+		echo "Bucket '$(_APPVAULT_BUCKET)' already exists - nothing to do."; \
+	else \
+		echo "Creating S3 bucket '$(_APPVAULT_BUCKET)' in $(_APPVAULT_REGION)..."; \
+		if [ "$(_APPVAULT_REGION)" = "us-east-1" ]; then \
+			aws s3api create-bucket \
+				--bucket $(_APPVAULT_BUCKET) \
+				--region $(_APPVAULT_REGION); \
+		else \
+			aws s3api create-bucket \
+				--bucket $(_APPVAULT_BUCKET) \
+				--region $(_APPVAULT_REGION) \
+				--create-bucket-configuration LocationConstraint=$(_APPVAULT_REGION); \
+		fi; \
+		echo "Bucket '$(_APPVAULT_BUCKET)' created."; \
+	fi
+
 # State bucket name, DynamoDB table, and region from values-trident.yaml
 _STATE_BUCKET := $(shell yq '.terraform.state.bucket // ""' values-trident.yaml 2>/dev/null)
 _DYNAMODB_TABLE := $(shell yq '.terraform.state.dynamodb_table // "terraform-state-lock"' values-trident.yaml 2>/dev/null)

@@ -27,11 +27,9 @@ tridentProtect:
       vaultPath: secret/data/hub/aws
       secretName: trident-protect-s3-creds
     # S3 configuration (used for all S3-compatible providers including AWS)
+    # bucketName and region come from values-global.yaml (.global.tridentProtect.appVault.s3)
     s3:
-      # AWS S3 endpoint format: https://s3.<region>.amazonaws.com
       endpointURL: amazonaws.com
-      bucketName: ocpvdr-trident-protect
-      region: us-west-1
 
   # Applications to protect
   # Each application can include one or more namespaces
