@@ -20,6 +20,14 @@ tridentFSX:
       defaults:
         snapshotDir: "true"
         nameTemplate: "{{ .config.StoragePrefix }}_{{ .volume.Namespace }}_{{ .volume.RequestName }}"
+      storageClass:
+        backendType: ontap-nas
     iscsi:
       storageDriverName: ontap-san
       storagePrefix: trident_iscsi
+      storageClass:
+        backendType: ontap-san
+        annotations:
+          storageclass.kubevirt.io/is-default-virt-class: "true"
+        mountOptions:
+          - discard
