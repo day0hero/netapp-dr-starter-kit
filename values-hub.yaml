@@ -43,6 +43,11 @@ clusterGroup:
       namespace: open-cluster-management
       channel: release-2.15
       # csv: advanced-cluster-management.v2.6.1
+    trident:
+      name: trident-operator
+      namespace: openshift-operators
+      channel: stable
+      source: certified-operators
   argoProjects:
     - hub
     - trident
@@ -93,6 +98,7 @@ clusterGroup:
       argoProject: trident
     protect:
       name: trident-protect
+      disabled: true
       namespace: trident-protect
       argoProject: trident
       chart: trident-protect
@@ -110,6 +116,7 @@ clusterGroup:
         jqPathExpressions:
         - '.webhooks[].clientConfig.caBundle'
     protect-config:
+      disabled: true
       name: trident-protect-config
       namespace: trident-protect
       argoProject: trident
