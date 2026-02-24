@@ -3,10 +3,19 @@ clusterGroup:
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     golang-external-secrets:
+    trident:
+    trident-protect:
   # The only subscription on spokes is gitops which gets managed by ACM
-  # subscriptions:
+  subscriptions:
+    trident:
+      name: trident-operator
+      namespace: openshift-operators
+      channel: stable
+      source: certified-operators
   argoProjects:
     - eso
+    - trident
+    - protect
   applications:
     golang-external-secrets:
       name: golang-external-secrets
@@ -14,6 +23,11 @@ clusterGroup:
       argoProject: eso
       chart: golang-external-secrets
       chartVersion: 0.1.*
+    trident:
+      name: trident
+      namespace: trident
+      path: charts/all/trident
+      argoProject: trident
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
