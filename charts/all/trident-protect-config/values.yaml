@@ -7,6 +7,12 @@ secretStoreRef:
   name: vault-backend
   kind: ClusterSecretStore
 
+# Datamover eso secret config
+kopiaSecret:
+  name: trident-protect-kopia-password
+  vaultKey: secret/data/global/datamover
+  property: KOPIA_PASSWORD
+
 # Trident Protect AppVault configuration
 tridentProtect:
   # AppVault for S3-compatible storage (AWS S3, ONTAP-S3, etc.)
