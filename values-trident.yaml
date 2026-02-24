@@ -5,11 +5,6 @@ terraform:
     region: us-west-1
     dynamodb_table: terraform-state-lock
 
-tridentFSX:
-  iscsi:
-    mgmtLIF: svm-087bb6998bedbb8c5.fs-02cf9e68896ff916e.fsx.us-west-1.amazonaws.com
-    svm: SVM1
-
 # Trident Protect configuration
 tridentProtect:
   appVault:

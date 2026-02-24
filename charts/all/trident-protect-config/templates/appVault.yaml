@@ -7,11 +7,11 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 spec:
-  providerType: {{ .Values.tridentProtect.appVault.providerType }}
+  providerType: {{ default "AWS" | .Values.tridentProtect.appVault.providerType }}
   providerConfig:
 {{- with .Values.tridentProtect.appVault.s3 }}
     s3:
-      endpoint: {{ .endpoint | quote }}
+      endpoint: s3.{{ .region }}.{{ .endpointURL | quote }}
       bucketName: {{ .bucketName | quote }}
       {{- if hasKey . "secure" }}
       secure: {{ .secure | quote }}

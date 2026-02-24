@@ -23,8 +23,9 @@ tridentProtect:
     # S3 configuration (used for all S3-compatible providers including AWS)
     s3:
       # AWS S3 endpoint format: https://s3.<region>.amazonaws.com
-      endpoint: https://s3.us-west-1.amazonaws.com
+      endpointURL: amazonaws.com
       bucketName: ocpvdr-trident-protect
+      region: us-west-1
 
   # Applications to protect
   # Each application can include one or more namespaces
