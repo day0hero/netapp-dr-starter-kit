@@ -9,9 +9,9 @@ secretStoreRef:
 
 # Maps to $gitroot/values-secret.yaml-template declaration
 tridentFSX:
+  key: secret/data/global/fsx-admin
+  backendSecretName: backend-fsxn-secret
   iscsi:
-    key: secret/data/global/fsx-admin
-    secretName: trident-ontap-iscsi-svm
     storagePrefix: trident_iscsi
     lunsPerFlexvol: 100
     mgmtLIF: "" # Example LIF address: management.fs-1877692518d2cc2b8.fsx.us-west-1.amazonaws.com
