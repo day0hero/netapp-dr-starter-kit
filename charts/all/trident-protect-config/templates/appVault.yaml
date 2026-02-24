@@ -11,7 +11,7 @@ spec:
   providerConfig:
 {{- with .Values.tridentProtect.appVault.s3 }}
     s3:
-      endpoint: s3.{{ .region }}.{{ .endpointURL | quote }}
+      endpoint: s3.{{ .region }}.{{ .endpointURL }}
       bucketName: {{ .bucketName | quote }}
       {{- if hasKey . "secure" }}
       secure: {{ .secure | quote }}
