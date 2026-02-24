@@ -11,13 +11,15 @@ secretStoreRef:
 tridentFSX:
   key: secret/data/global/fsx-admin
   backendSecretName: backend-fsxn-secret
-  iscsi:
-    storagePrefix: trident_iscsi
-    lunsPerFlexvol: 100
-    mgmtLIF: "" # Example LIF address: management.fs-1877692518d2cc2b8.fsx.us-west-1.amazonaws.com
-    storageDriverName: ontap-san
-    svm: fsx
-  storageClass:
-    name: trident-csi-iscsi
-    backendType: ontap-san
-    fsType: ext4
+  mgmtLIF: ""
+  svm: SVM1
+  backends:
+    nfs:
+      storageDriverName: ontap-nas
+      storagePrefix: trident_nfs
+      defaults:
+        snapshotDir: "true"
+        nameTemplate: "{{ .config.StoragePrefix }}_{{ .volume.Namespace }}_{{ .volume.RequestName }}"
+    iscsi:
+      storageDriverName: ontap-san
+      storagePrefix: trident_iscsi

@@ -1,3 +1,6 @@
+tridentFSX:
+  mgmtLIF: 198.19.226.180
+  svm: SVM1
 clusterGroup:
   name: secondary
   # Namespace is a dictionary for easier overriding (lists are supported as well)
@@ -85,7 +88,6 @@ clusterGroup:
 #      path: path/to/myapp
 #      repoURL: https://github.com/vendor/applications.git
 #      targetRevision: main
-
 #  managedSites:
 #    factory:
 #      name: factory

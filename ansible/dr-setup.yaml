@@ -285,6 +285,7 @@
           svm_id: "{{ (_prod_fsx_outputs_raw.stdout | from_json).svm_id.value }}"
           svm_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).svm_name.value }}"
           svm_mgmt_dns_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).svm_management_endpoint_dns_name.value | default('') }}"
+          svm_mgmt_ips: "{{ (_prod_fsx_outputs_raw.stdout | from_json).svm_management_endpoint_ip_addresses.value | default([]) }}"
           intercluster_dns_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_dns_name.value | default('') }}"
           intercluster_ips: "{{ (_prod_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_ip_addresses.value | default([]) }}"
           security_group_id: "{{ (_prod_fsx_outputs_raw.stdout | from_json).security_group_id.value }}"
@@ -300,6 +301,7 @@
           svm_id: "{{ (_dr_fsx_outputs_raw.stdout | from_json).svm_id.value }}"
           svm_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).svm_name.value }}"
           svm_mgmt_dns_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).svm_management_endpoint_dns_name.value | default('') }}"
+          svm_mgmt_ips: "{{ (_dr_fsx_outputs_raw.stdout | from_json).svm_management_endpoint_ip_addresses.value | default([]) }}"
           intercluster_dns_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_dns_name.value | default('') }}"
           intercluster_ips: "{{ (_dr_fsx_outputs_raw.stdout | from_json).intercluster_endpoint_ip_addresses.value | default([]) }}"
           security_group_id: "{{ (_dr_fsx_outputs_raw.stdout | from_json).security_group_id.value }}"
@@ -308,7 +310,67 @@
       when: not (_dr_fsx_prepared.skipped | default(false))
 
 # -----------------------------------------------------------------------------
-# Play 7: Summary
+# Play 7: Update values files with FSx management LIF IPs
+# -----------------------------------------------------------------------------
+- name: Update values files with FSx mgmtLIF
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _project_root: "{{ playbook_dir }}/.."
+  tasks:
+    - name: Skip values update if destroying
+      meta: end_play
+      when: destroy_resources | default(false)
+
+    - name: Set mgmtLIF IPs from FSx outputs
+      set_fact:
+        _hub_mgmt_lif: "{{ prod_fsx.svm_mgmt_ips | first }}"
+        _secondary_mgmt_lif: "{{ dr_fsx.svm_mgmt_ips | first }}"
+
+    - name: Update values-hub.yaml .tridentFSX.mgmtLIF
+      ansible.builtin.shell: >-
+        yq -i '.tridentFSX.mgmtLIF = "{{ _hub_mgmt_lif }}"'
+        {{ _project_root }}/values-hub.yaml
+      register: _hub_update
+      changed_when: _hub_update.rc == 0
+
+    - name: Update values-hub.yaml .tridentFSX.svm
+      ansible.builtin.shell: >-
+        yq -i '.tridentFSX.svm = "{{ prod_fsx.svm_name }}"'
+        {{ _project_root }}/values-hub.yaml
+      register: _hub_svm_update
+      changed_when: _hub_svm_update.rc == 0
+
+    - name: Update values-secondary.yaml .tridentFSX.mgmtLIF
+      ansible.builtin.shell: >-
+        yq -i '.tridentFSX.mgmtLIF = "{{ _secondary_mgmt_lif }}"'
+        {{ _project_root }}/values-secondary.yaml
+      register: _secondary_update
+      changed_when: _secondary_update.rc == 0
+
+    - name: Update values-secondary.yaml .tridentFSX.svm
+      ansible.builtin.shell: >-
+        yq -i '.tridentFSX.svm = "{{ dr_fsx.svm_name }}"'
+        {{ _project_root }}/values-secondary.yaml
+      register: _secondary_svm_update
+      changed_when: _secondary_svm_update.rc == 0
+
+    - name: Display values file updates
+      debug:
+        msg:
+          - "=========================================="
+          - "Values Files Updated"
+          - "=========================================="
+          - "  values-hub.yaml:"
+          - "    tridentFSX.mgmtLIF: {{ _hub_mgmt_lif }}"
+          - "    tridentFSX.svm:     {{ prod_fsx.svm_name }}"
+          - "  values-secondary.yaml:"
+          - "    tridentFSX.mgmtLIF: {{ _secondary_mgmt_lif }}"
+          - "    tridentFSX.svm:     {{ dr_fsx.svm_name }}"
+          - "=========================================="
+
+# -----------------------------------------------------------------------------
+# Play 8: Summary
 # -----------------------------------------------------------------------------
 - name: DR Infrastructure Summary
   hosts: localhost
