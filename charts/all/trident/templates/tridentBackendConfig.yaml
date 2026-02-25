@@ -6,7 +6,7 @@ metadata:
   name: {{ $.Values.clusterGroup.name }}-backend-fsxn-{{ $fstype }}
   namespace: trident
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "5"
 spec:
   version: 1
   backendName: {{ $.Values.clusterGroup.name }}-fsxn-{{ $fstype }}
