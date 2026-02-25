@@ -17,10 +17,12 @@ kopiaSecret:
 # values-hub.yaml / values-secondary.yaml via the Validated Patterns framework.
 tridentFSX:
   mgmtLIF: ""
+  clusterLIF: ""
   svm: SVM1
   interclusterIPs: []
   peer:
     mgmtLIF: ""
+    clusterLIF: ""
     svm: SVM1
     interclusterIPs: []
 
