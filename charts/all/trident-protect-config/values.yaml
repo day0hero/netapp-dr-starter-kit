@@ -48,8 +48,8 @@ tridentProtect:
   ontapPeering:
     enabled: true
     image: image-registry.openshift-image-registry.svc:5000/openshift/tools
-    secretName: ontap-admin-creds
-    vaultKey: secret/data/global/fsx-admin
+    secretName: ontap-cluster-admin-creds
+    vaultKey: secret/data/global/fsx-cluster-admin
 
   # Applications to protect
   # Each application can include one or more namespaces
