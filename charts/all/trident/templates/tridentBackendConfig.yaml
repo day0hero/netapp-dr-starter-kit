@@ -7,7 +7,6 @@ metadata:
   namespace: trident
   annotations:
     argocd.argoproj.io/sync-wave: "5"
-    argocd.argoproj.io/skip-dry-run-on-missing-resource: "true"
 spec:
   version: 1
   backendName: {{ $.Values.clusterGroup.name }}-fsxn-{{ $fstype }}
