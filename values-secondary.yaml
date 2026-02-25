@@ -8,10 +8,19 @@ clusterGroup:
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     golang-external-secrets:
+      disabled: true
+    external-secrets-operator:
+      operatorGroup: true
+      targetNamespaces: []
+    external-secrets:
     trident:
     trident-protect:
   # The only subscription on spokes is gitops which gets managed by ACM
   subscriptions:
+    eso:
+      name: openshift-external-secrets-operator
+      namespace: external-secrets-operator
+      channel: stable-v1
     trident:
       name: trident-operator
       namespace: openshift-operators
@@ -23,11 +32,18 @@ clusterGroup:
     - protect
   applications:
     golang-external-secrets:
+      disabled: true
       name: golang-external-secrets
       namespace: golang-external-secrets
       argoProject: eso
       chart: golang-external-secrets
       chartVersion: 0.1.*
+    openshift-external-secrets:
+      name: openshift-external-secrets
+      namespace: external-secrets
+      argoProject: eso
+      chart: openshift-external-secrets
+      chartVersion: 0.0.*
     trident:
       name: trident
       namespace: trident
