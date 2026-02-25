@@ -27,10 +27,8 @@ spec:
               AUTH="${ONTAP_USER}:${ONTAP_PASS}"
 
               LOCAL_CLUSTER_MGMT="{{ .Values.tridentFSX.clusterLIF }}"
-              REMOTE_CLUSTER_MGMT="{{ .Values.tridentFSX.peer.clusterLIF }}"
               LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
               REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
-              LOCAL_IC_IPS='{{ .Values.tridentFSX.interclusterIPs | toJson }}'
               REMOTE_IC_IPS='{{ .Values.tridentFSX.peer.interclusterIPs | toJson }}'
 
               api() {
@@ -38,13 +36,15 @@ spec:
               }
 
               echo "============================================"
-              echo "  ONTAP Cluster & SVM Peering"
+              echo "  ONTAP Cluster & SVM Peering (local side)"
               echo "============================================"
-              echo "  Local  cluster mgmt: ${LOCAL_CLUSTER_MGMT}  SVM: ${LOCAL_SVM}"
-              echo "  Remote cluster mgmt: ${REMOTE_CLUSTER_MGMT}  SVM: ${REMOTE_SVM}"
+              echo "  Local cluster mgmt: ${LOCAL_CLUSTER_MGMT}"
+              echo "  Local SVM:          ${LOCAL_SVM}"
+              echo "  Remote SVM:         ${REMOTE_SVM}"
+              echo "  Remote IC IPs:      ${REMOTE_IC_IPS}"
               echo "============================================"
 
-              # ---- Step 1: Cluster Peering ----
+              # ---- Step 1: Cluster Peering (local side only) ----
               echo ""
               echo "--- Checking cluster peering ---"
               PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers")
@@ -66,43 +66,48 @@ spec:
                   echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
                 fi
 
-                echo "Creating cluster peer on remote FSx (${REMOTE_CLUSTER_MGMT})..."
-                RESP=$(api -X POST "https://${REMOTE_CLUSTER_MGMT}/api/cluster/peers" \
-                  -d "{\"remote\":{\"ip_addresses\":${LOCAL_IC_IPS}},\"authentication\":{\"passphrase\":\"${PASSPHRASE}\"}}" \
-                  -w "\n%{http_code}" 2>/dev/null)
-                HTTP=$(echo "${RESP}" | tail -1)
-                BODY=$(echo "${RESP}" | sed '$d')
-                echo "  HTTP ${HTTP}"
-                if [ "${HTTP}" -ge 400 ]; then
-                  echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
-                fi
-
-                echo "Waiting for cluster peering to establish..."
+                echo "Waiting for peer cluster to configure its side..."
                 sleep 15
               fi
 
               # ---- Step 2: Wait for peering to become available ----
               echo ""
               echo "--- Verifying cluster peering ---"
+              echo "  (Peering completes once both clusters have configured their side)"
               RETRIES=0
-              while [ ${RETRIES} -lt 12 ]; do
+              while [ ${RETRIES} -lt 30 ]; do
                 PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers")
+                PEER_COUNT=$(echo "${PEERS}" | jq '.num_records // 0')
+                if [ "${PEER_COUNT}" -eq 0 ]; then
+                  echo "  No peers yet (waiting for local creation to propagate...)"
+                  RETRIES=$((RETRIES + 1))
+                  sleep 10
+                  continue
+                fi
                 PEER_STATE=$(echo "${PEERS}" | jq -r '.records[0].status.state // "unknown"')
                 if [ "${PEER_STATE}" = "available" ]; then
                   break
                 fi
-                echo "  Peer state: ${PEER_STATE} (waiting...)"
+                echo "  Peer state: ${PEER_STATE} (waiting for remote side...)"
                 RETRIES=$((RETRIES + 1))
                 sleep 10
               done
 
               PEER_UUID=$(echo "${PEERS}" | jq -r '.records[0].uuid // empty')
               PEER_NAME=$(echo "${PEERS}" | jq -r '.records[0].name // empty')
+              PEER_STATE=$(echo "${PEERS}" | jq -r '.records[0].status.state // "unknown"')
               echo "  Cluster peer: ${PEER_NAME} (${PEER_UUID}) - state: ${PEER_STATE}"
 
               if [ -z "${PEER_UUID}" ]; then
-                echo "ERROR: No cluster peer found after creation."
+                echo "ERROR: No cluster peer found."
                 exit 1
+              fi
+
+              if [ "${PEER_STATE}" != "available" ]; then
+                echo "WARNING: Cluster peer not yet available (state: ${PEER_STATE})."
+                echo "  The remote cluster Job may not have run yet."
+                echo "  SVM peering will be attempted on next sync."
+                exit 0
               fi
 
               # ---- Step 3: SVM Peering ----
@@ -132,7 +137,7 @@ spec:
               # ---- Step 4: Final Verification ----
               echo ""
               echo "============================================"
-              echo "  Peering Status"
+              echo "  Peering Status (local view)"
               echo "============================================"
               echo "Cluster peers:"
               api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers" | \
@@ -141,7 +146,7 @@ spec:
               api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers" | \
                 jq -r '.records[] | "  \(.svm.name) <-> \(.peer.svm.name): \(.state)"'
               echo "============================================"
-              echo "  ONTAP peering complete"
+              echo "  ONTAP peering (local side) complete"
               echo "============================================"
           volumeMounts:
             - name: ontap-creds
