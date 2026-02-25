@@ -44,7 +44,7 @@ tridentProtect:
 
   # ONTAP cluster and SVM peering (runs as a one-time Job)
   ontapPeering:
-    enabled: false
+    enabled: true
     baseImage: registry.access.redhat.com/ubi9/ubi-minimal:latest
     image: ontap-peering:latest
     secretName: ontap-admin-creds

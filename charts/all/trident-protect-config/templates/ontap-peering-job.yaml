@@ -16,7 +16,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: ontap-peering
-          image: {{ .Values.tridentProtect.ontapPeering.image | default "alpine:3" }}
+          image: {{ .Values.tridentProtect.ontapPeering.image }}
           command: ["/bin/sh", "-c"]
           args:
             - |
