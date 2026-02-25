@@ -4,6 +4,7 @@ metadata:
   name: trident
   annotatations:
     argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/skip-dry-run-on-missing-resource: "true"
 spec:
   IPv6: false
   debug: true
