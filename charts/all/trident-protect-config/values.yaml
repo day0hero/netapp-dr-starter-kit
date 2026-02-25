@@ -45,8 +45,7 @@ tridentProtect:
   # ONTAP cluster and SVM peering (runs as a one-time Job)
   ontapPeering:
     enabled: true
-    baseImage: registry.access.redhat.com/ubi9/ubi-minimal:latest
-    image: ontap-peering:latest
+    image: image-registry.openshift-image-registry.svc:5000/openshift/tools
     secretName: ontap-admin-creds
     vaultKey: secret/data/global/fsx-admin
 
