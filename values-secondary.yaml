@@ -1,5 +1,5 @@
 tridentFSX:
-  mgmtLIF: 198.19.226.180
+  mgmtLIF: 198.19.41.13
   svm: SVM1
 clusterGroup:
   name: secondary

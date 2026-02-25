@@ -1,5 +1,5 @@
 tridentFSX:
-  mgmtLIF: 198.19.88.222
+  mgmtLIF: 198.19.149.92
   svm: SVM1
 clusterGroup:
   name: hub
