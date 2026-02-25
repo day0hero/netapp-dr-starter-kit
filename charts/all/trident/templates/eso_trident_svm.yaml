@@ -3,8 +3,6 @@ kind: ExternalSecret
 metadata:
   name: eso-trident-backend-fsxn-secret
   namespace: trident
-  annotations:
-    argocd.argoproj.io/sync-wave: "-1"
 spec:
   secretStoreRef:
     name: {{ .Values.secretStoreRef.name }}
