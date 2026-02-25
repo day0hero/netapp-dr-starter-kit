@@ -1,3 +1,5 @@
+esoversion: "external-secrets.io/v1"
+
 tridentFSX:
   mgmtLIF: 198.19.41.13
   svm: SVM1
