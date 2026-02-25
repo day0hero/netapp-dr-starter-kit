@@ -1,6 +1,11 @@
 tridentFSX:
   mgmtLIF: 198.19.149.92
   svm: SVM1
+  interclusterIPs: []
+  peer:
+    mgmtLIF: ""
+    svm: SVM1
+    interclusterIPs: []
 clusterGroup:
   name: hub
   argoCD:

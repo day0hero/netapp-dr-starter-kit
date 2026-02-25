@@ -3,6 +3,11 @@ esoversion: "external-secrets.io/v1"
 tridentFSX:
   mgmtLIF: 198.19.41.13
   svm: SVM1
+  interclusterIPs: []
+  peer:
+    mgmtLIF: ""
+    svm: SVM1
+    interclusterIPs: []
 clusterGroup:
   name: secondary
   # Namespace is a dictionary for easier overriding (lists are supported as well)

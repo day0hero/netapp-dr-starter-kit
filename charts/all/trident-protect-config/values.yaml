@@ -13,6 +13,17 @@ kopiaSecret:
   vaultKey: secret/data/global/datamover
   property: KOPIA_PASSWORD
 
+# tridentFSX values are populated by make build-dr and merged from
+# values-hub.yaml / values-secondary.yaml via the Validated Patterns framework.
+tridentFSX:
+  mgmtLIF: ""
+  svm: SVM1
+  interclusterIPs: []
+  peer:
+    mgmtLIF: ""
+    svm: SVM1
+    interclusterIPs: []
+
 # Trident Protect AppVault configuration
 tridentProtect:
   # AppVault for S3-compatible storage (AWS S3, ONTAP-S3, etc.)
@@ -30,6 +41,14 @@ tridentProtect:
     # bucketName and region come from values-global.yaml (.global.tridentProtect.appVault.s3)
     s3:
       endpointURL: amazonaws.com
+
+  # ONTAP cluster and SVM peering (runs as a one-time Job)
+  ontapPeering:
+    enabled: false
+    baseImage: registry.access.redhat.com/ubi9/ubi-minimal:latest
+    image: ontap-peering:latest
+    secretName: ontap-admin-creds
+    vaultKey: secret/data/global/fsx-admin
 
   # Applications to protect
   # Each application can include one or more namespaces

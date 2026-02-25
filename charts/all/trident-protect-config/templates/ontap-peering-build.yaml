@@ -1,0 +1,38 @@
+{{- if .Values.tridentProtect.ontapPeering.enabled }}
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ontap-peering
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ontap-peering
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ontap-peering:latest
+  source:
+    type: Dockerfile
+    dockerfile: |
+      FROM {{ .Values.tridentProtect.ontapPeering.baseImage }}
+      RUN microdnf install -y curl jq && microdnf clean all
+  strategy:
+    type: Docker
+    dockerStrategy:
+      from:
+        kind: DockerImage
+        name: {{ .Values.tridentProtect.ontapPeering.baseImage }}
+  triggers:
+    - type: ConfigChange
+{{- end }}

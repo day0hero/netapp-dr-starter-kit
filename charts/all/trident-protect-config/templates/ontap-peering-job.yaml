@@ -1,0 +1,154 @@
+{{- if .Values.tridentProtect.ontapPeering.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ontap-peering-{{ .Release.Revision }}
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: ontap-peering
+          image: {{ .Values.tridentProtect.ontapPeering.image | default "alpine:3" }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+
+              ONTAP_USER=$(cat /credentials/username)
+              ONTAP_PASS=$(cat /credentials/password)
+              AUTH="${ONTAP_USER}:${ONTAP_PASS}"
+
+              LOCAL_MGMT="{{ .Values.tridentFSX.mgmtLIF }}"
+              REMOTE_MGMT="{{ .Values.tridentFSX.peer.mgmtLIF }}"
+              LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
+              REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
+              LOCAL_IC_IPS='{{ .Values.tridentFSX.interclusterIPs | toJson }}'
+              REMOTE_IC_IPS='{{ .Values.tridentFSX.peer.interclusterIPs | toJson }}'
+
+              api() {
+                curl -sk -u "${AUTH}" -H "Content-Type: application/json" "$@"
+              }
+
+              echo "============================================"
+              echo "  ONTAP Cluster & SVM Peering"
+              echo "============================================"
+              echo "  Local  mgmt: ${LOCAL_MGMT}  SVM: ${LOCAL_SVM}"
+              echo "  Remote mgmt: ${REMOTE_MGMT}  SVM: ${REMOTE_SVM}"
+              echo "============================================"
+
+              # ---- Step 1: Cluster Peering ----
+              echo ""
+              echo "--- Checking cluster peering ---"
+              PEERS=$(api "https://${LOCAL_MGMT}/api/cluster/peers")
+              PEER_COUNT=$(echo "${PEERS}" | jq '.num_records // 0')
+
+              if [ "${PEER_COUNT}" -gt 0 ]; then
+                echo "Cluster peering already exists (${PEER_COUNT} peer(s))."
+              else
+                PASSPHRASE="${ONTAP_PASS}"
+
+                echo "Creating cluster peer on local FSx (${LOCAL_MGMT})..."
+                RESP=$(api -X POST "https://${LOCAL_MGMT}/api/cluster/peers" \
+                  -d "{\"remote\":{\"ip_addresses\":${REMOTE_IC_IPS}},\"authentication\":{\"passphrase\":\"${PASSPHRASE}\"}}" \
+                  -w "\n%{http_code}" 2>/dev/null)
+                HTTP=$(echo "${RESP}" | tail -1)
+                BODY=$(echo "${RESP}" | sed '$d')
+                echo "  HTTP ${HTTP}"
+                if [ "${HTTP}" -ge 400 ]; then
+                  echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                fi
+
+                echo "Creating cluster peer on remote FSx (${REMOTE_MGMT})..."
+                RESP=$(api -X POST "https://${REMOTE_MGMT}/api/cluster/peers" \
+                  -d "{\"remote\":{\"ip_addresses\":${LOCAL_IC_IPS}},\"authentication\":{\"passphrase\":\"${PASSPHRASE}\"}}" \
+                  -w "\n%{http_code}" 2>/dev/null)
+                HTTP=$(echo "${RESP}" | tail -1)
+                BODY=$(echo "${RESP}" | sed '$d')
+                echo "  HTTP ${HTTP}"
+                if [ "${HTTP}" -ge 400 ]; then
+                  echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                fi
+
+                echo "Waiting for cluster peering to establish..."
+                sleep 15
+              fi
+
+              # ---- Step 2: Wait for peering to become available ----
+              echo ""
+              echo "--- Verifying cluster peering ---"
+              RETRIES=0
+              while [ ${RETRIES} -lt 12 ]; do
+                PEERS=$(api "https://${LOCAL_MGMT}/api/cluster/peers")
+                PEER_STATE=$(echo "${PEERS}" | jq -r '.records[0].status.state // "unknown"')
+                if [ "${PEER_STATE}" = "available" ]; then
+                  break
+                fi
+                echo "  Peer state: ${PEER_STATE} (waiting...)"
+                RETRIES=$((RETRIES + 1))
+                sleep 10
+              done
+
+              PEER_UUID=$(echo "${PEERS}" | jq -r '.records[0].uuid // empty')
+              PEER_NAME=$(echo "${PEERS}" | jq -r '.records[0].name // empty')
+              echo "  Cluster peer: ${PEER_NAME} (${PEER_UUID}) - state: ${PEER_STATE}"
+
+              if [ -z "${PEER_UUID}" ]; then
+                echo "ERROR: No cluster peer found after creation."
+                exit 1
+              fi
+
+              # ---- Step 3: SVM Peering ----
+              echo ""
+              echo "--- Checking SVM peering ---"
+              SVM_PEERS=$(api "https://${LOCAL_MGMT}/api/svm/peers")
+              SVM_PEER_COUNT=$(echo "${SVM_PEERS}" | jq '.num_records // 0')
+
+              if [ "${SVM_PEER_COUNT}" -gt 0 ]; then
+                echo "SVM peering already exists (${SVM_PEER_COUNT} peer(s))."
+              else
+                echo "Creating SVM peer: ${LOCAL_SVM} <-> ${REMOTE_SVM}..."
+                RESP=$(api -X POST "https://${LOCAL_MGMT}/api/svm/peers" \
+                  -d "{\"svm\":{\"name\":\"${LOCAL_SVM}\"},\"peer\":{\"cluster\":{\"uuid\":\"${PEER_UUID}\"},\"svm\":{\"name\":\"${REMOTE_SVM}\"}},\"applications\":[\"snapmirror\"]}" \
+                  -w "\n%{http_code}" 2>/dev/null)
+                HTTP=$(echo "${RESP}" | tail -1)
+                BODY=$(echo "${RESP}" | sed '$d')
+                echo "  HTTP ${HTTP}"
+                if [ "${HTTP}" -ge 400 ]; then
+                  echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                fi
+
+                echo "Waiting for SVM peering to establish..."
+                sleep 10
+              fi
+
+              # ---- Step 4: Final Verification ----
+              echo ""
+              echo "============================================"
+              echo "  Peering Status"
+              echo "============================================"
+              echo "Cluster peers:"
+              api "https://${LOCAL_MGMT}/api/cluster/peers" | \
+                jq -r '.records[] | "  \(.name): \(.status.state)"'
+              echo "SVM peers:"
+              api "https://${LOCAL_MGMT}/api/svm/peers" | \
+                jq -r '.records[] | "  \(.svm.name) <-> \(.peer.svm.name): \(.state)"'
+              echo "============================================"
+              echo "  ONTAP peering complete"
+              echo "============================================"
+          volumeMounts:
+            - name: ontap-creds
+              mountPath: /credentials
+              readOnly: true
+      volumes:
+        - name: ontap-creds
+          secret:
+            secretName: {{ .Values.tridentProtect.ontapPeering.secretName }}
+{{- end }}
