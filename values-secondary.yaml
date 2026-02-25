@@ -1,13 +1,16 @@
 esoversion: "external-secrets.io/v1"
-
 tridentFSX:
-  mgmtLIF: 198.19.41.13
+  mgmtLIF: 198.19.253.243
   svm: SVM1
-  interclusterIPs: []
+  interclusterIPs:
+    - 10.100.11.57
+    - 10.100.125.119
   peer:
-    mgmtLIF: ""
+    mgmtLIF: "198.19.105.27"
     svm: SVM1
-    interclusterIPs: []
+    interclusterIPs:
+      - 10.10.129.141
+      - 10.10.158.176
 clusterGroup:
   name: secondary
   # Namespace is a dictionary for easier overriding (lists are supported as well)
@@ -77,7 +80,6 @@ clusterGroup:
       namespace: trident-protect
       argoProject: trident
       path: charts/all/trident-protect-config
-
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
