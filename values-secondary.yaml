@@ -1,36 +1,27 @@
-esoversion: "external-secrets.io/v1"
 tridentFSX:
-  mgmtLIF: 198.19.253.243
-  clusterLIF: "198.19.253.72"
+  mgmtLIF: 198.19.219.163
+  clusterLIF: "198.19.219.136"
   svm: SVM1
   interclusterIPs:
-    - 10.100.11.57
-    - 10.100.125.119
+    - 10.100.110.176
+    - 10.100.12.34
   peer:
-    mgmtLIF: "198.19.105.27"
-    clusterLIF: "198.19.105.182"
+    mgmtLIF: "198.19.143.56"
+    clusterLIF: "198.19.143.166"
     svm: SVM1
     interclusterIPs:
-      - 10.10.129.141
-      - 10.10.158.176
+      - 10.10.131.117
+      - 10.10.152.180
 clusterGroup:
   name: secondary
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     golang-external-secrets:
-      disabled: true
     external-secrets-operator:
-      operatorGroup: true
-      targetNamespaces: []
-    external-secrets:
     trident:
     trident-protect:
   # The only subscription on spokes is gitops which gets managed by ACM
   subscriptions:
-    eso:
-      name: openshift-external-secrets-operator
-      namespace: external-secrets-operator
-      channel: stable-v1
     trident:
       name: trident-operator
       namespace: openshift-operators
@@ -42,18 +33,11 @@ clusterGroup:
     - protect
   applications:
     golang-external-secrets:
-      disabled: true
       name: golang-external-secrets
       namespace: golang-external-secrets
       argoProject: eso
       chart: golang-external-secrets
-      chartVersion: 0.1.*
-    openshift-external-secrets:
-      name: openshift-external-secrets
-      namespace: external-secrets
-      argoProject: eso
-      chart: openshift-external-secrets
-      chartVersion: 0.0.*
+      chartVersion: 0.2.*
     trident:
       name: trident
       namespace: trident
