@@ -42,6 +42,37 @@ clusterGroup:
             hs.message = "Awaiting TridentOrchestrator status."
           end
           return hs
+      - kind: ConfigMap
+        group: ""
+        check: |
+          hs = {}
+          if obj.metadata.name == "ontap-peering-status" then
+            if obj.data ~= nil then
+              local clusterState = obj.data.clusterPeeringState or "pending"
+              local svmState = obj.data.svmPeeringState or "pending"
+              local msg = obj.data.message or ""
+              if clusterState == "available" and svmState == "peered" then
+                hs.status = "Healthy"
+                hs.message = msg
+              elseif clusterState == "error" or svmState == "error" then
+                hs.status = "Degraded"
+                hs.message = msg
+              elseif clusterState == "available" then
+                hs.status = "Progressing"
+                hs.message = "Cluster peered, SVM: " .. svmState .. ". " .. msg
+              else
+                hs.status = "Progressing"
+                hs.message = "Cluster: " .. clusterState .. ". " .. msg
+              end
+            else
+              hs.status = "Progressing"
+              hs.message = "Waiting for peering job to update status"
+            end
+          else
+            hs.status = "Healthy"
+            hs.message = ""
+          end
+          return hs
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     open-cluster-management:

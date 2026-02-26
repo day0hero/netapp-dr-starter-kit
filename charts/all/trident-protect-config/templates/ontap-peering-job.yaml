@@ -14,6 +14,7 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      serviceAccountName: ontap-peering
       containers:
         - name: ontap-peering
           image: {{ .Values.tridentProtect.ontapPeering.image }}
@@ -30,9 +31,49 @@ spec:
               LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
               REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
               REMOTE_IC_IPS='{{ .Values.tridentFSX.peer.interclusterIPs | toJson }}'
+              NAMESPACE="trident-protect"
+              CM_NAME="ontap-peering-status"
 
               api() {
                 curl -sk -u "${AUTH}" -H "Content-Type: application/json" "$@"
+              }
+
+              update_status_cm() {
+                CLUSTER_STATE="$1"
+                SVM_STATE="$2"
+                PEER_NAME_VAL="${3:-}"
+                MSG="${4:-}"
+                TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+                cat <<CMEOF | curl -sk \
+                  -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+                  -H "Content-Type: application/json" \
+                  --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+                  -X PUT \
+                  "https://kubernetes.default.svc/api/v1/namespaces/${NAMESPACE}/configmaps/${CM_NAME}" \
+                  -d @- > /dev/null 2>&1
+              {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                  "name": "${CM_NAME}",
+                  "namespace": "${NAMESPACE}",
+                  "labels": {
+                    "app.kubernetes.io/component": "ontap-peering",
+                    "app.kubernetes.io/managed-by": "ontap-peering-job"
+                  }
+                },
+                "data": {
+                  "clusterPeeringState": "${CLUSTER_STATE}",
+                  "svmPeeringState": "${SVM_STATE}",
+                  "peerClusterName": "${PEER_NAME_VAL}",
+                  "localSVM": "${LOCAL_SVM}",
+                  "remoteSVM": "${REMOTE_SVM}",
+                  "message": "${MSG}",
+                  "lastUpdated": "${TIMESTAMP}"
+                }
+              }
+              CMEOF
               }
 
               echo "============================================"
@@ -47,6 +88,8 @@ spec:
               CLUSTER_PEERS_URL="https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers?fields=status,name,uuid"
               SVM_PEERS_URL="https://${LOCAL_CLUSTER_MGMT}/api/svm/peers?fields=state,svm,peer"
 
+              update_status_cm "initializing" "pending" "" "Peering job starting"
+
               # ---- Step 1: Cluster Peering (local side only) ----
               echo ""
               echo "--- Checking cluster peering ---"
@@ -59,6 +102,7 @@ spec:
                 PASSPHRASE="${ONTAP_PASS}"
 
                 echo "Creating cluster peer on local FSx (${LOCAL_CLUSTER_MGMT})..."
+                update_status_cm "creating" "pending" "" "Creating cluster peer"
                 RESP=$(api -X POST "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers" \
                   -d "{\"remote\":{\"ip_addresses\":${REMOTE_IC_IPS}},\"authentication\":{\"passphrase\":\"${PASSPHRASE}\"}}" \
                   -w "\n%{http_code}" 2>/dev/null)
@@ -66,7 +110,9 @@ spec:
                 BODY=$(echo "${RESP}" | sed '$d')
                 echo "  HTTP ${HTTP}"
                 if [ "${HTTP}" -ge 400 ]; then
-                  echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                  ERR_MSG=$(echo "${BODY}" | jq -r '.error.message // "unknown"')
+                  echo "  Error: ${ERR_MSG}"
+                  update_status_cm "error" "pending" "" "Cluster peer creation failed: ${ERR_MSG}"
                 fi
 
                 echo "Waiting for peer cluster to configure its side..."
@@ -92,6 +138,7 @@ spec:
                   break
                 fi
                 echo "  Peer state: ${PEER_STATE} (waiting for remote side...)"
+                update_status_cm "${PEER_STATE}" "pending" "" "Waiting for remote cluster to peer"
                 RETRIES=$((RETRIES + 1))
                 sleep 10
               done
@@ -103,6 +150,7 @@ spec:
 
               if [ -z "${PEER_UUID}" ]; then
                 echo "ERROR: No cluster peer found."
+                update_status_cm "error" "pending" "" "No cluster peer found after creation"
                 exit 1
               fi
 
@@ -110,8 +158,11 @@ spec:
                 echo "WARNING: Cluster peer not yet available (state: ${PEER_STATE})."
                 echo "  The remote cluster Job may not have run yet."
                 echo "  SVM peering will be attempted on next sync."
+                update_status_cm "${PEER_STATE}" "pending" "${PEER_NAME}" "Waiting for remote cluster"
                 exit 0
               fi
+
+              update_status_cm "available" "pending" "${PEER_NAME}" "Cluster peered, creating SVM peer"
 
               # ---- Step 3: SVM Peering ----
               echo ""
@@ -120,7 +171,9 @@ spec:
               SVM_PEER_COUNT=$(echo "${SVM_PEERS}" | jq '.num_records // 0')
 
               if [ "${SVM_PEER_COUNT}" -gt 0 ]; then
-                echo "SVM peering already exists (${SVM_PEER_COUNT} peer(s))."
+                SVM_STATE=$(echo "${SVM_PEERS}" | jq -r '.records[0].state // "unknown"')
+                echo "SVM peering already exists (${SVM_PEER_COUNT} peer(s)), state: ${SVM_STATE}."
+                update_status_cm "available" "${SVM_STATE}" "${PEER_NAME}" "Peering established"
               else
                 echo "Creating SVM peer: ${LOCAL_SVM} <-> ${REMOTE_SVM}..."
                 RESP=$(api -X POST "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers" \
@@ -130,11 +183,17 @@ spec:
                 BODY=$(echo "${RESP}" | sed '$d')
                 echo "  HTTP ${HTTP}"
                 if [ "${HTTP}" -ge 400 ]; then
-                  echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                  ERR_MSG=$(echo "${BODY}" | jq -r '.error.message // "unknown"')
+                  echo "  Error: ${ERR_MSG}"
+                  update_status_cm "available" "error" "${PEER_NAME}" "SVM peer creation failed: ${ERR_MSG}"
                 fi
 
                 echo "Waiting for SVM peering to establish..."
                 sleep 10
+
+                SVM_PEERS=$(api "${SVM_PEERS_URL}")
+                SVM_STATE=$(echo "${SVM_PEERS}" | jq -r '.records[0].state // "pending"')
+                update_status_cm "available" "${SVM_STATE}" "${PEER_NAME}" "SVM peering initiated"
               fi
 
               # ---- Step 4: Final Verification ----
@@ -146,10 +205,18 @@ spec:
               api "${CLUSTER_PEERS_URL}" | \
                 jq -r '.records[] | "  \(.name): \(.status.state)"'
               echo "SVM peers:"
-              api "${SVM_PEERS_URL}" | \
-                jq -r '.records[] | "  \(.svm.name) <-> \(.peer.svm.name): \(.state)"'
+              SVM_FINAL=$(api "${SVM_PEERS_URL}")
+              echo "${SVM_FINAL}" | jq -r '.records[] | "  \(.svm.name) <-> \(.peer.svm.name): \(.state)"'
               echo "============================================"
-              echo "  ONTAP peering (local side) complete"
+
+              FINAL_SVM_STATE=$(echo "${SVM_FINAL}" | jq -r '.records[0].state // "pending"')
+              if [ "${FINAL_SVM_STATE}" = "peered" ]; then
+                update_status_cm "available" "peered" "${PEER_NAME}" "Cluster and SVM peering fully established"
+                echo "  ONTAP peering fully established"
+              else
+                update_status_cm "available" "${FINAL_SVM_STATE}" "${PEER_NAME}" "SVM peering state: ${FINAL_SVM_STATE}"
+                echo "  ONTAP peering (local side) complete, SVM state: ${FINAL_SVM_STATE}"
+              fi
               echo "============================================"
           volumeMounts:
             - name: ontap-creds
