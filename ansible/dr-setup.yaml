@@ -446,11 +446,135 @@
 # Destroy Plays (only run when destroy_resources=true)
 #
 # Order matters — reverse of creation:
+#   0. Remove ONTAP SVM/cluster peering (required before SVM deletion)
 #   1. FSx filesystems (both regions)
 #   2. VPC peering
 #
 # Note: The Terraform state backend (S3 + DynamoDB) is NOT destroyed here.
 # Use "make destroy-terraform-state" separately if you want to remove it.
+# -----------------------------------------------------------------------------
+- name: Remove ONTAP Peering Relationships
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _project_root: "{{ playbook_dir }}/.."
+  tasks:
+    - name: Skip if not destroying
+      meta: end_play
+      when: not (destroy_resources | default(false))
+
+    - name: Load FSx password from ~/.fsx file
+      block:
+        - name: Check if ~/.fsx file exists
+          stat:
+            path: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_stat
+
+        - name: Read password from ~/.fsx file
+          slurp:
+            src: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_content
+          when: _fsx_file_stat.stat.exists | default(false)
+
+        - name: Set password from ~/.fsx file
+          set_fact:
+            fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
+          when:
+            - _fsx_file_stat.stat.exists | default(false)
+            - _fsx_file_content.content is defined
+            - fsx_admin_password is not defined or fsx_admin_password == ''
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
+
+    - name: Read Production cluster management LIF
+      ansible.builtin.shell: >-
+        yq '.tridentFSX.clusterLIF // ""' {{ _project_root }}/values-hub.yaml
+      register: _prod_lif_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Read DR cluster management LIF
+      ansible.builtin.shell: >-
+        yq '.tridentFSX.clusterLIF // ""' {{ _project_root }}/values-secondary.yaml
+      register: _dr_lif_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Set cluster LIF facts
+      set_fact:
+        _prod_cluster_lif: "{{ _prod_lif_raw.stdout | default('') | trim }}"
+        _dr_cluster_lif: "{{ _dr_lif_raw.stdout | default('') | trim }}"
+
+    - name: Display peering teardown info
+      debug:
+        msg:
+          - "=========================================="
+          - "Removing ONTAP Peering Before Destroy"
+          - "=========================================="
+          - "  Production clusterLIF: {{ _prod_cluster_lif }}"
+          - "  DR clusterLIF:         {{ _dr_cluster_lif }}"
+          - "=========================================="
+
+    - name: Remove SVM and cluster peering from Production FSx
+      ansible.builtin.shell: |
+        MGMT="{{ _prod_cluster_lif }}"
+        AUTH="fsxadmin:{{ fsx_admin_password }}"
+        echo "--- Removing SVM peers on ${MGMT} ---"
+        SVM_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers?fields=uuid,svm,peer" 2>/dev/null)
+        for UUID in $(echo "${SVM_PEERS}" | jq -r '.records[].uuid // empty'); do
+          echo "  Deleting SVM peer ${UUID}..."
+          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null
+        done
+        sleep 5
+        echo "--- Removing cluster peers on ${MGMT} ---"
+        CLUSTER_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers?fields=uuid,name" 2>/dev/null)
+        for UUID in $(echo "${CLUSTER_PEERS}" | jq -r '.records[].uuid // empty'); do
+          echo "  Deleting cluster peer ${UUID}..."
+          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/cluster/peers/${UUID}" 2>/dev/null
+        done
+        echo "--- Done ---"
+      register: _prod_unpeer
+      changed_when: true
+      failed_when: false
+      when: _prod_cluster_lif | default('') != ''
+
+    - name: Display Production unpeer output
+      debug:
+        var: _prod_unpeer.stdout_lines
+      when: _prod_unpeer is not skipped
+
+    - name: Remove SVM and cluster peering from DR FSx
+      ansible.builtin.shell: |
+        MGMT="{{ _dr_cluster_lif }}"
+        AUTH="fsxadmin:{{ fsx_admin_password }}"
+        echo "--- Removing SVM peers on ${MGMT} ---"
+        SVM_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers?fields=uuid,svm,peer" 2>/dev/null)
+        for UUID in $(echo "${SVM_PEERS}" | jq -r '.records[].uuid // empty'); do
+          echo "  Deleting SVM peer ${UUID}..."
+          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null
+        done
+        sleep 5
+        echo "--- Removing cluster peers on ${MGMT} ---"
+        CLUSTER_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers?fields=uuid,name" 2>/dev/null)
+        for UUID in $(echo "${CLUSTER_PEERS}" | jq -r '.records[].uuid // empty'); do
+          echo "  Deleting cluster peer ${UUID}..."
+          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/cluster/peers/${UUID}" 2>/dev/null
+        done
+        echo "--- Done ---"
+      register: _dr_unpeer
+      changed_when: true
+      failed_when: false
+      when: _dr_cluster_lif | default('') != ''
+
+    - name: Display DR unpeer output
+      debug:
+        var: _dr_unpeer.stdout_lines
+      when: _dr_unpeer is not skipped
+
+    - name: Wait for peering removal to propagate
+      pause:
+        seconds: 15
+      when: (_prod_cluster_lif | default('') != '') or (_dr_cluster_lif | default('') != '')
+
 # -----------------------------------------------------------------------------
 - name: Destroy FSx ONTAP Filesystems (parallel)
   hosts: localhost
