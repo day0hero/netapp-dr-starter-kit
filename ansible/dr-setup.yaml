@@ -458,6 +458,8 @@
   gather_facts: false
   vars:
     _project_root: "{{ playbook_dir }}/.."
+    _prod_fsx_name: "{{ prod_file_system_name | default(prod_cluster.cluster_name ~ '-' ~ prod_cluster.region ~ '-fsx') }}"
+    _dr_fsx_name: "{{ dr_file_system_name | default(dr_cluster.cluster_name ~ '-' ~ dr_cluster.region ~ '-fsx') }}"
   tasks:
     - name: Skip if not destroying
       meta: end_play
@@ -512,26 +514,161 @@
           - "=========================================="
           - "  Production clusterLIF: {{ _prod_cluster_lif }}"
           - "  DR clusterLIF:         {{ _dr_cluster_lif }}"
+          - "  Production FSx SG:     {{ _prod_fsx_name }}-sg"
+          - "  DR FSx SG:             {{ _dr_fsx_name }}-sg"
           - "=========================================="
 
-    - name: Remove SVM and cluster peering from Production FSx
+    # ------------------------------------------------------------------
+    # Ensure FSx security groups have the minimum rules needed for
+    # ONTAP management API access and intercluster communication.
+    # A prior partial Terraform destroy may have removed these rules,
+    # leaving the cluster peers unable to communicate and blocking
+    # SVM peer deletion (which deadlocks SVM/filesystem destroy).
+    # ------------------------------------------------------------------
+    - name: Ensure FSx security group connectivity rules
+      ansible.builtin.shell: |
+        SG_NAME="{{ item.sg_name }}"
+        REGION="{{ item.region }}"
+
+        SG_ID=$(aws ec2 describe-security-groups --region ${REGION} \
+          --filters "Name=group-name,Values=${SG_NAME}" \
+          --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null)
+
+        if [ -z "${SG_ID}" ] || [ "${SG_ID}" = "None" ]; then
+          echo "SKIP: Security group ${SG_NAME} not found in ${REGION}"
+          exit 0
+        fi
+
+        echo "SG_ID=${SG_ID}"
+        ADDED=""
+
+        aws ec2 authorize-security-group-egress --region ${REGION} --group-id ${SG_ID} \
+          --ip-permissions 'IpProtocol=-1,IpRanges=[{CidrIp=0.0.0.0/0}]' 2>/dev/null && ADDED="${ADDED} egress-all"
+
+        for CIDR in "{{ prod_cluster.vpc_cidr }}" "{{ dr_cluster.vpc_cidr }}"; do
+          for PORT in 443 11104 11105; do
+            aws ec2 authorize-security-group-ingress --region ${REGION} --group-id ${SG_ID} \
+              --protocol tcp --port ${PORT} --cidr ${CIDR} 2>/dev/null && ADDED="${ADDED} ${PORT}/${CIDR}"
+          done
+        done
+
+        if [ -n "${ADDED}" ]; then
+          echo "Restored missing rules:${ADDED}"
+        else
+          echo "All required connectivity rules already present"
+        fi
+      loop:
+        - sg_name: "{{ _prod_fsx_name }}-sg"
+          region: "{{ prod_cluster.region }}"
+        - sg_name: "{{ _dr_fsx_name }}-sg"
+          region: "{{ dr_cluster.region }}"
+      loop_control:
+        label: "{{ item.sg_name }}"
+      register: _sg_ensure
+      changed_when: "'Restored missing rules' in (item.stdout | default(''))"
+      failed_when: false
+
+    - name: Display SG rule restoration results
+      debug:
+        msg: "{{ item.stdout_lines | default(['(skipped)']) }}"
+      loop: "{{ _sg_ensure.results }}"
+      loop_control:
+        label: "{{ item.item.sg_name }}"
+      when: item.stdout is defined
+
+    - name: Wait for restored security group rules to take effect
+      pause:
+        seconds: 10
+      when: _sg_ensure.changed | default(false)
+
+    # ------------------------------------------------------------------
+    # Tear down ONTAP peering on each side. The script:
+    #   1. Tests connectivity to the FSx management endpoint
+    #   2. Waits for cluster peers to become available (SG rules may
+    #      have just been restored — ONTAP needs time to reconnect)
+    #   3. Deletes SVM peers and polls until they are fully removed
+    #   4. Deletes cluster peers with retries (SVM dependency)
+    # ------------------------------------------------------------------
+    - name: Remove ONTAP peering from Production FSx
       ansible.builtin.shell: |
         MGMT="{{ _prod_cluster_lif }}"
         AUTH="fsxadmin:{{ fsx_admin_password }}"
-        echo "--- Removing SVM peers on ${MGMT} ---"
-        SVM_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers?fields=uuid,svm,peer" 2>/dev/null)
-        for UUID in $(echo "${SVM_PEERS}" | jq -r '.records[].uuid // empty'); do
-          echo "  Deleting SVM peer ${UUID}..."
-          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null
+
+        echo "=== Testing connectivity to ${MGMT} ==="
+        HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+          -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
+        if [ "${HTTP_CODE}" = "000" ]; then
+          echo "WARNING: Cannot reach FSx management at ${MGMT}"
+          echo "Peering teardown skipped — Terraform destroy may fail if peering exists"
+          exit 0
+        fi
+        echo "Connected (HTTP ${HTTP_CODE})"
+
+        CL_COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
+          | jq -r '.num_records // 0')
+        if [ "${CL_COUNT}" = "0" ]; then
+          echo "No cluster peers found — nothing to do"
+          exit 0
+        fi
+
+        echo "=== Waiting for cluster peer connectivity ==="
+        for i in $(seq 1 24); do
+          STATE=$(curl -sk -u "${AUTH}" \
+            "https://${MGMT}/api/cluster/peers?fields=status" 2>/dev/null \
+            | jq -r '.records[0].status.state // "unknown"')
+          if [ "${STATE}" = "available" ]; then
+            echo "  Cluster peer is available"
+            break
+          fi
+          echo "  Cluster peer state: ${STATE} (${i}/24, waiting 10s)..."
+          sleep 10
         done
-        sleep 5
-        echo "--- Removing cluster peers on ${MGMT} ---"
-        CLUSTER_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers?fields=uuid,name" 2>/dev/null)
-        for UUID in $(echo "${CLUSTER_PEERS}" | jq -r '.records[].uuid // empty'); do
-          echo "  Deleting cluster peer ${UUID}..."
-          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/cluster/peers/${UUID}" 2>/dev/null
+
+        echo "=== Deleting SVM peers ==="
+        for UUID in $(curl -sk -u "${AUTH}" \
+          "https://${MGMT}/api/svm/peers?fields=uuid" 2>/dev/null \
+          | jq -r '.records[].uuid // empty'); do
+          echo "  DELETE SVM peer ${UUID}..."
+          curl -sk -u "${AUTH}" -X DELETE \
+            "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null | jq -c '.' 2>/dev/null
         done
-        echo "--- Done ---"
+
+        echo "=== Polling SVM peer removal (max 2 min) ==="
+        for i in $(seq 1 24); do
+          COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
+            | jq -r '.num_records // 0')
+          if [ "${COUNT}" = "0" ]; then
+            echo "  All SVM peers removed"
+            break
+          fi
+          echo "  ${COUNT} SVM peer(s) remaining (${i}/24)..."
+          sleep 5
+        done
+
+        echo "=== Deleting cluster peers ==="
+        for ATTEMPT in 1 2 3; do
+          REMAINING=0
+          for UUID in $(curl -sk -u "${AUTH}" \
+            "https://${MGMT}/api/cluster/peers?fields=uuid" 2>/dev/null \
+            | jq -r '.records[].uuid // empty'); do
+            echo "  DELETE cluster peer ${UUID} (attempt ${ATTEMPT})..."
+            RESP=$(curl -sk -u "${AUTH}" -X DELETE \
+              "https://${MGMT}/api/cluster/peers/${UUID}" -w '\n' 2>/dev/null)
+            if echo "${RESP}" | jq -e '.error' >/dev/null 2>&1; then
+              echo "  Error: $(echo "${RESP}" | jq -r '.error.message')"
+              REMAINING=$((REMAINING + 1))
+            fi
+          done
+          [ ${REMAINING} -eq 0 ] && break
+          echo "  Retrying in 10s..."
+          sleep 10
+        done
+
+        SVM_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
+          | jq -r '.num_records // 0')
+        CL_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
+          | jq -r '.num_records // 0')
+        echo "=== Done: ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
       register: _prod_unpeer
       changed_when: true
       failed_when: false
@@ -542,24 +679,86 @@
         var: _prod_unpeer.stdout_lines
       when: _prod_unpeer is not skipped
 
-    - name: Remove SVM and cluster peering from DR FSx
+    - name: Remove ONTAP peering from DR FSx
       ansible.builtin.shell: |
         MGMT="{{ _dr_cluster_lif }}"
         AUTH="fsxadmin:{{ fsx_admin_password }}"
-        echo "--- Removing SVM peers on ${MGMT} ---"
-        SVM_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers?fields=uuid,svm,peer" 2>/dev/null)
-        for UUID in $(echo "${SVM_PEERS}" | jq -r '.records[].uuid // empty'); do
-          echo "  Deleting SVM peer ${UUID}..."
-          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null
+
+        echo "=== Testing connectivity to ${MGMT} ==="
+        HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+          -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
+        if [ "${HTTP_CODE}" = "000" ]; then
+          echo "WARNING: Cannot reach FSx management at ${MGMT}"
+          echo "Peering teardown skipped — Terraform destroy may fail if peering exists"
+          exit 0
+        fi
+        echo "Connected (HTTP ${HTTP_CODE})"
+
+        CL_COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
+          | jq -r '.num_records // 0')
+        if [ "${CL_COUNT}" = "0" ]; then
+          echo "No cluster peers found — nothing to do"
+          exit 0
+        fi
+
+        echo "=== Waiting for cluster peer connectivity ==="
+        for i in $(seq 1 24); do
+          STATE=$(curl -sk -u "${AUTH}" \
+            "https://${MGMT}/api/cluster/peers?fields=status" 2>/dev/null \
+            | jq -r '.records[0].status.state // "unknown"')
+          if [ "${STATE}" = "available" ]; then
+            echo "  Cluster peer is available"
+            break
+          fi
+          echo "  Cluster peer state: ${STATE} (${i}/24, waiting 10s)..."
+          sleep 10
         done
-        sleep 5
-        echo "--- Removing cluster peers on ${MGMT} ---"
-        CLUSTER_PEERS=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers?fields=uuid,name" 2>/dev/null)
-        for UUID in $(echo "${CLUSTER_PEERS}" | jq -r '.records[].uuid // empty'); do
-          echo "  Deleting cluster peer ${UUID}..."
-          curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}/api/cluster/peers/${UUID}" 2>/dev/null
+
+        echo "=== Deleting SVM peers ==="
+        for UUID in $(curl -sk -u "${AUTH}" \
+          "https://${MGMT}/api/svm/peers?fields=uuid" 2>/dev/null \
+          | jq -r '.records[].uuid // empty'); do
+          echo "  DELETE SVM peer ${UUID}..."
+          curl -sk -u "${AUTH}" -X DELETE \
+            "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null | jq -c '.' 2>/dev/null
         done
-        echo "--- Done ---"
+
+        echo "=== Polling SVM peer removal (max 2 min) ==="
+        for i in $(seq 1 24); do
+          COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
+            | jq -r '.num_records // 0')
+          if [ "${COUNT}" = "0" ]; then
+            echo "  All SVM peers removed"
+            break
+          fi
+          echo "  ${COUNT} SVM peer(s) remaining (${i}/24)..."
+          sleep 5
+        done
+
+        echo "=== Deleting cluster peers ==="
+        for ATTEMPT in 1 2 3; do
+          REMAINING=0
+          for UUID in $(curl -sk -u "${AUTH}" \
+            "https://${MGMT}/api/cluster/peers?fields=uuid" 2>/dev/null \
+            | jq -r '.records[].uuid // empty'); do
+            echo "  DELETE cluster peer ${UUID} (attempt ${ATTEMPT})..."
+            RESP=$(curl -sk -u "${AUTH}" -X DELETE \
+              "https://${MGMT}/api/cluster/peers/${UUID}" -w '\n' 2>/dev/null)
+            if echo "${RESP}" | jq -e '.error' >/dev/null 2>&1; then
+              echo "  Error: $(echo "${RESP}" | jq -r '.error.message')"
+              REMAINING=$((REMAINING + 1))
+            fi
+          done
+          [ ${REMAINING} -eq 0 ] && break
+          echo "  Retrying in 10s..."
+          sleep 10
+        done
+
+        SVM_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
+          | jq -r '.num_records // 0')
+        CL_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
+          | jq -r '.num_records // 0')
+        echo "=== Done: ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
       register: _dr_unpeer
       changed_when: true
       failed_when: false
