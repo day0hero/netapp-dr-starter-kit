@@ -147,6 +147,25 @@
       You can override with cluster_vpc_name_override or provide vpc_id directly.
   when: discovered_cluster.vpc_id | default('') == ''
 
+- name: "{{ cluster_label }} - Correct VPC CIDR from AWS"
+  set_fact:
+    discovered_cluster: >-
+      {{ discovered_cluster | combine({
+          'vpc_cidr': _actual_cidr
+      }) }}
+  vars:
+    _actual_cidr: >-
+      {{ _vpc_lookup.vpcs[0].cidr_block
+         if (_vpc_lookup.vpcs | default([]) | length > 0)
+         else (
+           _vpc_lookup_tag.vpcs[0].cidr_block
+           if (_vpc_lookup_tag is defined and _vpc_lookup_tag.vpcs | default([]) | length > 0)
+           else discovered_cluster.vpc_cidr
+         ) }}
+  when:
+    - discovered_cluster.vpc_id | default('') != ''
+    - cluster_vpc_cidr_override | default('') | trim == ''
+
 # Discover subnets (private subnets tagged by the cluster)
 - name: "{{ cluster_label }} - Build subnet filters (standard cluster)"
   set_fact:

@@ -12,7 +12,7 @@ tridentFSX:
   key: secret/data/global/fsx-admin
   backendSecretName: backend-fsxn-secret
   mgmtLIF: ""
-  svm: SVM1
+  svm: ""
   backends:
     nfs:
       storageDriverName: ontap-nas

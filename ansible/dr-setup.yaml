@@ -582,93 +582,106 @@
       when: _sg_ensure.changed | default(false)
 
     # ------------------------------------------------------------------
-    # Tear down ONTAP peering on each side. The script:
-    #   1. Tests connectivity to the FSx management endpoint
-    #   2. Waits for cluster peers to become available (SG rules may
-    #      have just been restored — ONTAP needs time to reconnect)
-    #   3. Deletes SVM peers and polls until they are fully removed
-    #   4. Deletes cluster peers with retries (SVM dependency)
+    # Tear down ONTAP peering on each side. The script runs inside the
+    # cluster (via oc run) so it can reach the FSx management LIFs
+    # which are only accessible from within the VPC.
     # ------------------------------------------------------------------
+    - name: Write ONTAP unpeer script
+      ansible.builtin.copy:
+        dest: /tmp/ontap-unpeer.sh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          MGMT="${ONTAP_MGMT}"
+          AUTH="${ONTAP_AUTH}"
+
+          echo "=== Testing connectivity to ${MGMT} ==="
+          HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+            -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
+          if [ "${HTTP_CODE}" = "000" ]; then
+            echo "WARNING: Cannot reach FSx management at ${MGMT}"
+            echo "Peering teardown skipped"
+            exit 0
+          fi
+          echo "Connected (HTTP ${HTTP_CODE})"
+
+          CL_COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
+            | jq -r '.num_records // 0')
+          if [ "${CL_COUNT}" = "0" ]; then
+            echo "No cluster peers found — nothing to do"
+            exit 0
+          fi
+
+          echo "=== Waiting for cluster peer connectivity ==="
+          for i in $(seq 1 24); do
+            STATE=$(curl -sk -u "${AUTH}" \
+              "https://${MGMT}/api/cluster/peers?fields=status" 2>/dev/null \
+              | jq -r '.records[0].status.state // "unknown"')
+            if [ "${STATE}" = "available" ]; then
+              echo "  Cluster peer is available"
+              break
+            fi
+            echo "  Cluster peer state: ${STATE} (${i}/24, waiting 10s)..."
+            sleep 10
+          done
+
+          echo "=== Deleting SVM peers ==="
+          for UUID in $(curl -sk -u "${AUTH}" \
+            "https://${MGMT}/api/svm/peers?fields=uuid" 2>/dev/null \
+            | jq -r '.records[].uuid // empty'); do
+            echo "  DELETE SVM peer ${UUID}..."
+            curl -sk -u "${AUTH}" -X DELETE \
+              "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null | jq -c '.' 2>/dev/null
+          done
+
+          echo "=== Polling SVM peer removal (max 2 min) ==="
+          for i in $(seq 1 24); do
+            COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
+              | jq -r '.num_records // 0')
+            if [ "${COUNT}" = "0" ]; then
+              echo "  All SVM peers removed"
+              break
+            fi
+            echo "  ${COUNT} SVM peer(s) remaining (${i}/24)..."
+            sleep 5
+          done
+
+          echo "=== Deleting cluster peers ==="
+          for ATTEMPT in 1 2 3; do
+            REMAINING=0
+            for UUID in $(curl -sk -u "${AUTH}" \
+              "https://${MGMT}/api/cluster/peers?fields=uuid" 2>/dev/null \
+              | jq -r '.records[].uuid // empty'); do
+              echo "  DELETE cluster peer ${UUID} (attempt ${ATTEMPT})..."
+              RESP=$(curl -sk -u "${AUTH}" -X DELETE \
+                "https://${MGMT}/api/cluster/peers/${UUID}" -w '\n' 2>/dev/null)
+              if echo "${RESP}" | jq -e '.error' >/dev/null 2>&1; then
+                echo "  Error: $(echo "${RESP}" | jq -r '.error.message')"
+                REMAINING=$((REMAINING + 1))
+              fi
+            done
+            [ ${REMAINING} -eq 0 ] && break
+            echo "  Retrying in 10s..."
+            sleep 10
+          done
+
+          SVM_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
+            | jq -r '.num_records // 0')
+          CL_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
+            | jq -r '.num_records // 0')
+          echo "=== Done: ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
+
     - name: Remove ONTAP peering from Production FSx
       ansible.builtin.shell: |
-        MGMT="{{ _prod_cluster_lif }}"
-        AUTH="fsxadmin:{{ fsx_admin_password }}"
-
-        echo "=== Testing connectivity to ${MGMT} ==="
-        HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
-          -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
-        if [ "${HTTP_CODE}" = "000" ]; then
-          echo "WARNING: Cannot reach FSx management at ${MGMT}"
-          echo "Peering teardown skipped — Terraform destroy may fail if peering exists"
-          exit 0
-        fi
-        echo "Connected (HTTP ${HTTP_CODE})"
-
-        CL_COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
-          | jq -r '.num_records // 0')
-        if [ "${CL_COUNT}" = "0" ]; then
-          echo "No cluster peers found — nothing to do"
-          exit 0
-        fi
-
-        echo "=== Waiting for cluster peer connectivity ==="
-        for i in $(seq 1 24); do
-          STATE=$(curl -sk -u "${AUTH}" \
-            "https://${MGMT}/api/cluster/peers?fields=status" 2>/dev/null \
-            | jq -r '.records[0].status.state // "unknown"')
-          if [ "${STATE}" = "available" ]; then
-            echo "  Cluster peer is available"
-            break
-          fi
-          echo "  Cluster peer state: ${STATE} (${i}/24, waiting 10s)..."
-          sleep 10
-        done
-
-        echo "=== Deleting SVM peers ==="
-        for UUID in $(curl -sk -u "${AUTH}" \
-          "https://${MGMT}/api/svm/peers?fields=uuid" 2>/dev/null \
-          | jq -r '.records[].uuid // empty'); do
-          echo "  DELETE SVM peer ${UUID}..."
-          curl -sk -u "${AUTH}" -X DELETE \
-            "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null | jq -c '.' 2>/dev/null
-        done
-
-        echo "=== Polling SVM peer removal (max 2 min) ==="
-        for i in $(seq 1 24); do
-          COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
-            | jq -r '.num_records // 0')
-          if [ "${COUNT}" = "0" ]; then
-            echo "  All SVM peers removed"
-            break
-          fi
-          echo "  ${COUNT} SVM peer(s) remaining (${i}/24)..."
-          sleep 5
-        done
-
-        echo "=== Deleting cluster peers ==="
-        for ATTEMPT in 1 2 3; do
-          REMAINING=0
-          for UUID in $(curl -sk -u "${AUTH}" \
-            "https://${MGMT}/api/cluster/peers?fields=uuid" 2>/dev/null \
-            | jq -r '.records[].uuid // empty'); do
-            echo "  DELETE cluster peer ${UUID} (attempt ${ATTEMPT})..."
-            RESP=$(curl -sk -u "${AUTH}" -X DELETE \
-              "https://${MGMT}/api/cluster/peers/${UUID}" -w '\n' 2>/dev/null)
-            if echo "${RESP}" | jq -e '.error' >/dev/null 2>&1; then
-              echo "  Error: $(echo "${RESP}" | jq -r '.error.message')"
-              REMAINING=$((REMAINING + 1))
-            fi
-          done
-          [ ${REMAINING} -eq 0 ] && break
-          echo "  Retrying in 10s..."
-          sleep 10
-        done
-
-        SVM_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
-          | jq -r '.num_records // 0')
-        CL_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
-          | jq -r '.num_records // 0')
-        echo "=== Done: ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
+        B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
+        KUBECONFIG="{{ prod_kubeconfig }}" oc run ontap-unpeer-prod \
+          --rm --restart=Never --attach=true --quiet \
+          --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
+          --env="ONTAP_MGMT={{ _prod_cluster_lif }}" \
+          --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
+          --env="SCRIPT_B64=${B64}" \
+          --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
+          -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
       register: _prod_unpeer
       changed_when: true
       failed_when: false
@@ -681,84 +694,15 @@
 
     - name: Remove ONTAP peering from DR FSx
       ansible.builtin.shell: |
-        MGMT="{{ _dr_cluster_lif }}"
-        AUTH="fsxadmin:{{ fsx_admin_password }}"
-
-        echo "=== Testing connectivity to ${MGMT} ==="
-        HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
-          -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
-        if [ "${HTTP_CODE}" = "000" ]; then
-          echo "WARNING: Cannot reach FSx management at ${MGMT}"
-          echo "Peering teardown skipped — Terraform destroy may fail if peering exists"
-          exit 0
-        fi
-        echo "Connected (HTTP ${HTTP_CODE})"
-
-        CL_COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
-          | jq -r '.num_records // 0')
-        if [ "${CL_COUNT}" = "0" ]; then
-          echo "No cluster peers found — nothing to do"
-          exit 0
-        fi
-
-        echo "=== Waiting for cluster peer connectivity ==="
-        for i in $(seq 1 24); do
-          STATE=$(curl -sk -u "${AUTH}" \
-            "https://${MGMT}/api/cluster/peers?fields=status" 2>/dev/null \
-            | jq -r '.records[0].status.state // "unknown"')
-          if [ "${STATE}" = "available" ]; then
-            echo "  Cluster peer is available"
-            break
-          fi
-          echo "  Cluster peer state: ${STATE} (${i}/24, waiting 10s)..."
-          sleep 10
-        done
-
-        echo "=== Deleting SVM peers ==="
-        for UUID in $(curl -sk -u "${AUTH}" \
-          "https://${MGMT}/api/svm/peers?fields=uuid" 2>/dev/null \
-          | jq -r '.records[].uuid // empty'); do
-          echo "  DELETE SVM peer ${UUID}..."
-          curl -sk -u "${AUTH}" -X DELETE \
-            "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null | jq -c '.' 2>/dev/null
-        done
-
-        echo "=== Polling SVM peer removal (max 2 min) ==="
-        for i in $(seq 1 24); do
-          COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
-            | jq -r '.num_records // 0')
-          if [ "${COUNT}" = "0" ]; then
-            echo "  All SVM peers removed"
-            break
-          fi
-          echo "  ${COUNT} SVM peer(s) remaining (${i}/24)..."
-          sleep 5
-        done
-
-        echo "=== Deleting cluster peers ==="
-        for ATTEMPT in 1 2 3; do
-          REMAINING=0
-          for UUID in $(curl -sk -u "${AUTH}" \
-            "https://${MGMT}/api/cluster/peers?fields=uuid" 2>/dev/null \
-            | jq -r '.records[].uuid // empty'); do
-            echo "  DELETE cluster peer ${UUID} (attempt ${ATTEMPT})..."
-            RESP=$(curl -sk -u "${AUTH}" -X DELETE \
-              "https://${MGMT}/api/cluster/peers/${UUID}" -w '\n' 2>/dev/null)
-            if echo "${RESP}" | jq -e '.error' >/dev/null 2>&1; then
-              echo "  Error: $(echo "${RESP}" | jq -r '.error.message')"
-              REMAINING=$((REMAINING + 1))
-            fi
-          done
-          [ ${REMAINING} -eq 0 ] && break
-          echo "  Retrying in 10s..."
-          sleep 10
-        done
-
-        SVM_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
-          | jq -r '.num_records // 0')
-        CL_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
-          | jq -r '.num_records // 0')
-        echo "=== Done: ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
+        B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
+        KUBECONFIG="{{ dr_kubeconfig }}" oc run ontap-unpeer-dr \
+          --rm --restart=Never --attach=true --quiet \
+          --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
+          --env="ONTAP_MGMT={{ _dr_cluster_lif }}" \
+          --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
+          --env="SCRIPT_B64=${B64}" \
+          --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
+          -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
       register: _dr_unpeer
       changed_when: true
       failed_when: false
@@ -768,6 +712,11 @@
       debug:
         var: _dr_unpeer.stdout_lines
       when: _dr_unpeer is not skipped
+
+    - name: Clean up unpeer script
+      ansible.builtin.file:
+        path: /tmp/ontap-unpeer.sh
+        state: absent
 
     - name: Wait for peering removal to propagate
       pause:
