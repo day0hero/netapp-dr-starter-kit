@@ -191,6 +191,7 @@
         fsx_label: "Production FSx"
         file_system_name_override: "{{ prod_file_system_name | default('') }}"
         terraform_state_region: "{{ prod_cluster.region }}"
+        svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
         allowed_cidrs:
           - "{{ prod_cluster.vpc_cidr }}"
           - "{{ dr_cluster.vpc_cidr }}"
@@ -209,6 +210,7 @@
         fsx_label: "DR FSx"
         file_system_name_override: "{{ dr_file_system_name | default('') }}"
         terraform_state_region: "{{ prod_cluster.region }}"
+        svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
         allowed_cidrs:
           - "{{ dr_cluster.vpc_cidr }}"
           - "{{ prod_cluster.vpc_cidr }}"
@@ -467,6 +469,7 @@
         fsx_label: "Production FSx"
         file_system_name_override: "{{ prod_file_system_name | default('') }}"
         terraform_state_region: "{{ prod_cluster.region }}"
+        svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
         allowed_cidrs:
           - "{{ prod_cluster.vpc_cidr }}"
           - "{{ dr_cluster.vpc_cidr }}"
@@ -486,6 +489,7 @@
         fsx_label: "DR FSx"
         file_system_name_override: "{{ dr_file_system_name | default('') }}"
         terraform_state_region: "{{ prod_cluster.region }}"
+        svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
         allowed_cidrs:
           - "{{ dr_cluster.vpc_cidr }}"
           - "{{ prod_cluster.vpc_cidr }}"

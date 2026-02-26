@@ -175,9 +175,16 @@ spec:
                 echo "SVM peering already exists (${SVM_PEER_COUNT} peer(s)), state: ${SVM_STATE}."
                 update_status_cm "available" "${SVM_STATE}" "${PEER_NAME}" "Peering established"
               else
-                echo "Creating SVM peer: ${LOCAL_SVM} <-> ${REMOTE_SVM}..."
+                SVM_PEER_ALIAS="${REMOTE_SVM}"
+                if [ "${LOCAL_SVM}" = "${REMOTE_SVM}" ]; then
+                  SVM_PEER_ALIAS="${REMOTE_SVM}-${PEER_NAME}"
+                  echo "  Local and remote SVM names are identical (${LOCAL_SVM})"
+                  echo "  Using peer alias: ${SVM_PEER_ALIAS}"
+                fi
+
+                echo "Creating SVM peer: ${LOCAL_SVM} <-> ${REMOTE_SVM} (alias: ${SVM_PEER_ALIAS})..."
                 RESP=$(api -X POST "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers" \
-                  -d "{\"svm\":{\"name\":\"${LOCAL_SVM}\"},\"peer\":{\"cluster\":{\"uuid\":\"${PEER_UUID}\"},\"svm\":{\"name\":\"${REMOTE_SVM}\"}},\"applications\":[\"snapmirror\"]}" \
+                  -d "{\"name\":\"${SVM_PEER_ALIAS}\",\"svm\":{\"name\":\"${LOCAL_SVM}\"},\"peer\":{\"cluster\":{\"uuid\":\"${PEER_UUID}\"},\"svm\":{\"name\":\"${REMOTE_SVM}\"}},\"applications\":[\"snapmirror\"]}" \
                   -w "\n%{http_code}" 2>/dev/null)
                 HTTP=$(echo "${RESP}" | tail -1)
                 BODY=$(echo "${RESP}" | sed '$d')
@@ -188,9 +195,31 @@ spec:
                   update_status_cm "available" "error" "${PEER_NAME}" "SVM peer creation failed: ${ERR_MSG}"
                 fi
 
-                echo "Waiting for SVM peering to establish..."
-                sleep 10
+                if [ "${HTTP}" = "202" ]; then
+                  JOB_UUID=$(echo "${BODY}" | jq -r '.job.uuid // empty')
+                  if [ -n "${JOB_UUID}" ]; then
+                    echo "  Async job: ${JOB_UUID} - waiting for completion..."
+                    RETRIES=0
+                    while [ ${RETRIES} -lt 12 ]; do
+                      JOB_RESP=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/jobs/${JOB_UUID}")
+                      JOB_STATE=$(echo "${JOB_RESP}" | jq -r '.state // "running"')
+                      if [ "${JOB_STATE}" = "success" ]; then
+                        echo "  SVM peer job completed successfully."
+                        break
+                      elif [ "${JOB_STATE}" = "failure" ]; then
+                        JOB_MSG=$(echo "${JOB_RESP}" | jq -r '.message // "unknown"')
+                        echo "  SVM peer job failed: ${JOB_MSG}"
+                        update_status_cm "available" "error" "${PEER_NAME}" "SVM peering failed: ${JOB_MSG}"
+                        break
+                      fi
+                      echo "  Job state: ${JOB_STATE} (waiting...)"
+                      RETRIES=$((RETRIES + 1))
+                      sleep 5
+                    done
+                  fi
+                fi
 
+                sleep 5
                 SVM_PEERS=$(api "${SVM_PEERS_URL}")
                 SVM_STATE=$(echo "${SVM_PEERS}" | jq -r '.records[0].state // "pending"')
                 update_status_cm "available" "${SVM_STATE}" "${PEER_NAME}" "SVM peering initiated"

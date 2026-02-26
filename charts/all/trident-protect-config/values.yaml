@@ -18,12 +18,12 @@ kopiaSecret:
 tridentFSX:
   mgmtLIF: ""
   clusterLIF: ""
-  svm: SVM1
+  svm: ""
   interclusterIPs: []
   peer:
     mgmtLIF: ""
     clusterLIF: ""
-    svm: SVM1
+    svm: ""
     interclusterIPs: []
 
 # Trident Protect AppVault configuration
