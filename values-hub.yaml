@@ -1,17 +1,17 @@
 tridentFSX:
-  mgmtLIF: 198.19.143.56
-  clusterLIF: "198.19.143.166"
+  mgmtLIF: 198.19.67.161
+  clusterLIF: "198.19.67.48"
   svm: SVM1
   interclusterIPs:
-    - 10.10.131.117
-    - 10.10.152.180
+    - 10.10.128.8
+    - 10.10.150.51
   peer:
-    mgmtLIF: "198.19.219.163"
-    clusterLIF: "198.19.219.136"
+    mgmtLIF: "198.19.249.131"
+    clusterLIF: "198.19.249.71"
     svm: SVM1
     interclusterIPs:
-      - 10.100.110.176
-      - 10.100.12.34
+      - 10.100.150.25
+      - 10.100.185.240
 clusterGroup:
   name: hub
   argoCD:
