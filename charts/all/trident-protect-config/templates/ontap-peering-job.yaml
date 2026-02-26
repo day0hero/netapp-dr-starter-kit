@@ -44,10 +44,13 @@ spec:
               echo "  Remote IC IPs:      ${REMOTE_IC_IPS}"
               echo "============================================"
 
+              CLUSTER_PEERS_URL="https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers?fields=status,name,uuid"
+              SVM_PEERS_URL="https://${LOCAL_CLUSTER_MGMT}/api/svm/peers?fields=state,svm,peer"
+
               # ---- Step 1: Cluster Peering (local side only) ----
               echo ""
               echo "--- Checking cluster peering ---"
-              PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers")
+              PEERS=$(api "${CLUSTER_PEERS_URL}")
               PEER_COUNT=$(echo "${PEERS}" | jq '.num_records // 0')
 
               if [ "${PEER_COUNT}" -gt 0 ]; then
@@ -76,7 +79,7 @@ spec:
               echo "  (Peering completes once both clusters have configured their side)"
               RETRIES=0
               while [ ${RETRIES} -lt 30 ]; do
-                PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers")
+                PEERS=$(api "${CLUSTER_PEERS_URL}")
                 PEER_COUNT=$(echo "${PEERS}" | jq '.num_records // 0')
                 if [ "${PEER_COUNT}" -eq 0 ]; then
                   echo "  No peers yet (waiting for local creation to propagate...)"
@@ -113,7 +116,7 @@ spec:
               # ---- Step 3: SVM Peering ----
               echo ""
               echo "--- Checking SVM peering ---"
-              SVM_PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers")
+              SVM_PEERS=$(api "${SVM_PEERS_URL}")
               SVM_PEER_COUNT=$(echo "${SVM_PEERS}" | jq '.num_records // 0')
 
               if [ "${SVM_PEER_COUNT}" -gt 0 ]; then
@@ -140,10 +143,10 @@ spec:
               echo "  Peering Status (local view)"
               echo "============================================"
               echo "Cluster peers:"
-              api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers" | \
+              api "${CLUSTER_PEERS_URL}" | \
                 jq -r '.records[] | "  \(.name): \(.status.state)"'
               echo "SVM peers:"
-              api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers" | \
+              api "${SVM_PEERS_URL}" | \
                 jq -r '.records[] | "  \(.svm.name) <-> \(.peer.svm.name): \(.state)"'
               echo "============================================"
               echo "  ONTAP peering (local side) complete"
