@@ -117,8 +117,7 @@ clusterGroup:
       repoURL: https://netapp.github.io/trident-protect-helm-chart
       chartVersion: 100.2510.0
       ignoreDifferences:
-        - group: ""
-          kind: Secret
+        - kind: Secret
           name: tp-webhook-tls
           jqPathExpressions:
             - .data
