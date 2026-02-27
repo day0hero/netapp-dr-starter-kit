@@ -44,9 +44,10 @@ tridentProtect:
     s3:
       endpointURL: amazonaws.com
 
-  # ONTAP cluster and SVM peering (runs as a one-time Job)
+  # ONTAP cluster and SVM peering (runs as a CronJob for self-healing)
   ontapPeering:
     enabled: true
+    schedule: "*/2 * * * *"
     image: image-registry.openshift-image-registry.svc:5000/openshift/tools
     secretName: ontap-cluster-admin-creds
     vaultKey: secret/data/global/fsx-cluster-admin

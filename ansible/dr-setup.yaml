@@ -671,17 +671,21 @@
             | jq -r '.num_records // 0')
           echo "=== Done: ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
 
-    - name: Remove ONTAP peering from Production FSx
+    - name: Remove ONTAP peering from Production FSx (running in-cluster pod)
       ansible.builtin.shell: |
         B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
+        echo ">>> Launching unpeer pod on Production cluster ({{ _prod_cluster_lif }})..."
+        echo ">>> This may take 1-5 minutes if peers need to be removed."
         KUBECONFIG="{{ prod_kubeconfig }}" oc run ontap-unpeer-prod \
-          --rm --restart=Never --attach=true --quiet \
+          --rm --restart=Never --attach=true \
           --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
           --env="ONTAP_MGMT={{ _prod_cluster_lif }}" \
           --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
           --env="SCRIPT_B64=${B64}" \
           --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
           -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
+        RC=$?
+        echo ">>> Production unpeer pod exited (rc=${RC})"
       register: _prod_unpeer
       changed_when: true
       failed_when: false
@@ -692,17 +696,21 @@
         var: _prod_unpeer.stdout_lines
       when: _prod_unpeer is not skipped
 
-    - name: Remove ONTAP peering from DR FSx
+    - name: Remove ONTAP peering from DR FSx (running in-cluster pod)
       ansible.builtin.shell: |
         B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
+        echo ">>> Launching unpeer pod on DR cluster ({{ _dr_cluster_lif }})..."
+        echo ">>> This may take 1-5 minutes if peers need to be removed."
         KUBECONFIG="{{ dr_kubeconfig }}" oc run ontap-unpeer-dr \
-          --rm --restart=Never --attach=true --quiet \
+          --rm --restart=Never --attach=true \
           --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
           --env="ONTAP_MGMT={{ _dr_cluster_lif }}" \
           --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
           --env="SCRIPT_B64=${B64}" \
           --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
           -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
+        RC=$?
+        echo ">>> DR unpeer pod exited (rc=${RC})"
       register: _dr_unpeer
       changed_when: true
       failed_when: false
