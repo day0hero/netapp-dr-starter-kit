@@ -1,0 +1,29 @@
+---
+# Defaults for vpc_peering_terraform role
+
+# Terraform source directory (where .tf files live)
+vpc_peering_tf_source: "{{ playbook_dir }}/../terraform/vpc-peering"
+
+# Working directory for terraform execution (per-deployment isolation)
+vpc_peering_tf_workdir: "/tmp/netapp-dr-terraform/vpc-peering"
+
+# Container configuration for running Terraform
+container_runtime: "podman"
+terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
+
+# Terraform state (S3 backend)
+terraform_state_bucket: ""
+terraform_state_key: "vpc-peering/terraform.tfstate"
+terraform_state_dynamodb_table: "terraform-state-lock"
+
+# Enable DNS resolution across the peering connection
+# Requires ec2:ModifyVpcPeeringConnectionOptions permission
+vpc_peering_enable_dns_resolution: false
+
+# Operation mode
+terraform_destroy: false
+
+# Tags
+tags:
+  ManagedBy: "Terraform"
+  Purpose: "DR-VPC-Peering"

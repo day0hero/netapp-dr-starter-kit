@@ -1,19 +1,19 @@
 tridentFSX:
-  mgmtLIF: 198.19.129.196
-  clusterLIF: "198.19.129.163"
+  mgmtLIF: 198.19.255.75
+  clusterLIF: "198.19.255.209"
   svm: SVM1
   interclusterIPs:
-    - 10.0.137.163
-    - 10.0.152.197
+    - 10.100.134.2
+    - 10.100.157.247
   peer:
-    mgmtLIF: "198.19.255.75"
-    clusterLIF: "198.19.255.209"
+    mgmtLIF: "198.19.129.196"
+    clusterLIF: "198.19.129.163"
     svm: SVM1
     interclusterIPs:
-      - 10.100.134.2
-      - 10.100.157.247
+      - 10.0.137.163
+      - 10.0.152.197
 clusterGroup:
-  name: hub
+  name: secondary
   argoCD:
     resourceHealthChecks:
       - kind: TridentOrchestrator
@@ -44,67 +44,27 @@ clusterGroup:
           return hs
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
-    open-cluster-management:
-    vault:
     golang-external-secrets:
     trident:
     trident-protect:
-    openshift-cnv:
-    wordpress:
+  # The only subscription on spokes is gitops which gets managed by ACM
   subscriptions:
-    acm:
-      name: advanced-cluster-management
-      namespace: open-cluster-management
-      channel: release-2.15
-      # csv: advanced-cluster-management.v2.6.1
     trident:
       name: trident-operator
       namespace: openshift-operators
       channel: stable
       source: certified-operators
   argoProjects:
-    - hub
+    - eso
     - trident
-  # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
-  # We can use self-referential variables because the chart calls the tpl function with these variables defined
-  sharedValueFiles:
-    - '/overrides/values-{{ $.Values.global.clusterPlatform }}.yaml'
-    - '/overrides/values-{{ $.Values.global.clusterVersion }}-{{ $.Values.clusterGroup.name }}.yaml'
-  # sharedValueFiles is a flexible mechanism that will add the listed valuefiles to every app defined in the
-  # applications section. We intend this to supplement and possibly even replace previous "magic" mechanisms, though
-  # we do not at present have a target date for removal.
-  #
-  # To replicate the "classic" magic include structure, the clusterGroup would need all of these
-  # sharedValueFiles, in this order:
-  #   - '/overrides/values-{{ $.Values.global.clusterPlatform }}.yaml'
-  #   - '/overrides/values-{{ $.Values.global.clusterPlatform }}-{{ $.Values.global.clusterVersion }}.yaml'
-  #   - '/overrides/values-{{ $.Values.global.clusterPlatform }}-{{ $.Values.clusterGroup.name }}.yaml'
-  #   - '/overrides/values-{{ $.Values.global.clusterVersion }}-{{ $.Values.clusterGroup.name }}.yaml"
-  #   - '/overrides/values-{{ $.Values.global.localClusterName }}.yaml'
-
-  # This kind of variable substitution will work with any of the variables the Validated Patterns operator knows
-  # about and sets, so this is also possible, for example:
-  #   - '/overrides/values-{{ $.Values.global.hubClusterDomain }}.yaml'
-  #   - '/overrides/values-{{ $.Values.global.localClusterDomain }}.yaml'
+    - protect
   applications:
-    acm:
-      name: acm
-      namespace: open-cluster-management
-      argoProject: hub
-      chart: acm
-      chartVersion: 0.1.*
-    vault:
-      name: vault
-      namespace: vault
-      argoProject: hub
-      chart: hashicorp-vault
-      chartVersion: 0.1.*
     golang-external-secrets:
       name: golang-external-secrets
       namespace: golang-external-secrets
-      argoProject: hub
+      argoProject: eso
       chart: golang-external-secrets
-      chartVersion: 0.1.*
+      chartVersion: 0.2.*
     trident:
       name: trident
       namespace: trident
@@ -132,11 +92,6 @@ clusterGroup:
       namespace: trident-protect
       argoProject: trident
       path: charts/all/trident-protect-config
-    wordpress:
-      name: wordpress
-      namespace: wordpress
-      argoProject: hub
-      path: charts/all/wordpress
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
@@ -151,41 +106,16 @@ clusterGroup:
         # per playbook timeout in seconds
         timeout: 234
         # verbosity: "-v"
-  managedClusterGroups:
-    exampleRegion:
-      name: secondary
-      acmlabels:
-        - name: clusterGroup
-          value: secondary
-          # helmOverrides:
-          #   - name: foo
-          #     value: bar
-          # Before enabling cluster provisioning, ensure AWS and/or Azure
-          #   credentials and OCP pull secrets are defined in Vault.
-          #   See values-secret.yaml.template
-          #
-          # clusterPools:
-          #  exampleAWSPool:
-          #    name: aws-ap
-          #    openshiftVersion: 4.10.18
-          #    baseDomain: blueprints.rhecoeng.com
-          #    platform:
-          #      aws:
-          #        region: ap-southeast-2
-          #    clusters:
-          #    - One
-          #
-          #  exampleAzurePool:
-          #    name: azure-us
-          #    openshiftVersion: 4.10.18
-          #    baseDomain: blueprints.rhecoeng.com
-          #    platform:
-          #      azure:
-          #        baseDomainResourceGroupName: dojo-dns-zones
-          #        region: eastus
-          #    clusters:
-          #    - Two
-          #    - Three
+  # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
+  # We can use self-referential variables because the chart calls the tpl function with these variables defined
+  sharedValueFiles:
+    - '/overrides/values-{{ $.Values.global.clusterPlatform }}.yaml'
+    # To mirror the "Classic" magic include structure, the clusterGroup would need all of these:
+    # sharedValueFiles:
+    #   - '/overrides/values-{{ $.Values.global.clusterPlatform }}.yaml'
+    #   - '/overrides/values-{{ $.Values.global.clusterPlatform }}-{{ $.Values.global.clusterVersion }}.yaml'
+    #   - '/overrides/values-{{ $.Values.global.clusterPlatform }}-{{ $.Values.clusterGroup.name }}.yaml'
+    #   - '/overrides/values-{{ $.Values.global.clusterVersion }}-{{ $.Values.clusterGroup.name }}.yaml"
 #  To have apps in multiple flavors, use namespaces and use helm overrides as appropriate
 #
 #    pipelines:

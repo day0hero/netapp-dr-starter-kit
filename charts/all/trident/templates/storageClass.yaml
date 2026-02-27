@@ -1,0 +1,26 @@
+{{- range $fstype, $backend := .Values.tridentFSX.backends }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: storage-class-{{ $fstype }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+{{- if $backend.storageClass.annotations }}
+    {{- toYaml $backend.storageClass.annotations | nindent 4 }}
+{{- end }}
+provisioner: csi.trident.netapp.io
+parameters:
+  backendType: {{ $backend.storageClass.backendType | quote }}
+{{- if eq $fstype "iscsi" }}
+  sanType: "iscsi"
+{{- end }}
+{{- if eq $fstype "nfs" }}
+  nasType: "nfs"
+{{- end }}
+{{- if $backend.storageClass.mountOptions }}
+mountOptions:
+  {{- toYaml $backend.storageClass.mountOptions | nindent 2 }}
+{{- end }}
+allowVolumeExpansion: true
+{{- end }}

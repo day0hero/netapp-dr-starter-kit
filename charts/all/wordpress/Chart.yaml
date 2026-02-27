@@ -1,0 +1,11 @@
+apiVersion: v2
+name: wordpress
+description: WordPress deployment for validated patterns framework
+type: application
+version: 0.1.0
+appVersion: "6.9.1"
+
+dependencies:
+  - name: wordpress
+    version: 29.1.*
+    repository: https://charts.bitnami.com/bitnami

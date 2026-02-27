@@ -1,0 +1,18 @@
+apiVersion: trident.netapp.io/v1
+kind: TridentOrchestrator
+metadata:
+  name: trident
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  IPv6: false
+  debug: true
+  imagePullSecrets: []
+  imageRegistry: ""
+  namespace: trident
+  nodePrep:
+  - iscsi
+  silenceAutosupport: false
+  k8sTimeout: 30
+status: {}

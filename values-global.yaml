@@ -1,10 +1,19 @@
 ---
 global:
-  pattern: multicloud-gitops
+  pattern: netapp-dr-starter-kit
   options:
     useCSV: false
     syncPolicy: Automatic
     installPlanApproval: Automatic
+
+  tridentProtect:
+    appVault:
+      enabled: true
+      name: s3-appvault
+      s3:
+        bucketName: trident-protect-bucket
+        region: us-west-1
+
 main:
   clusterGroupName: hub
   multiSourceConfig:

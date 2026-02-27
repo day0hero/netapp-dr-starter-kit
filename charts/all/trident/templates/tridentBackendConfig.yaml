@@ -1,0 +1,30 @@
+{{- range $fstype, $backend := .Values.tridentFSX.backends }}
+---
+apiVersion: trident.netapp.io/v1
+kind: TridentBackendConfig
+metadata:
+  name: {{ $.Values.clusterGroup.name }}-backend-fsxn-{{ $fstype }}
+  namespace: trident
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  version: 1
+  backendName: {{ $.Values.clusterGroup.name }}-fsxn-{{ $fstype }}
+  storageDriverName: {{ $backend.storageDriverName }}
+  managementLIF: {{ $.Values.tridentFSX.mgmtLIF }}
+  svm: {{ $.Values.tridentFSX.svm }}
+{{- if eq $fstype "iscsi" }}
+  sanType: iscsi
+{{- end }}
+{{- if eq $fstype "nfs" }}
+  nasType: nfs
+{{- end }}
+  storagePrefix: {{ $backend.storagePrefix | default $.Values.clusterGroup.name }}
+{{- if $backend.defaults }}
+  defaults:
+    {{- toYaml $backend.defaults | nindent 4 }}
+{{- end }}
+  credentials:
+    name: {{ $.Values.tridentFSX.backendSecretName }}
+{{- end }}

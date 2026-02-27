@@ -1,0 +1,8 @@
+apiVersion: v2
+name: trident-protect-config
+description: Configuration resources for Trident Protect (AppVault, etc.)
+
+type: application
+
+version: 0.1.0
+appVersion: "25.10.0"
