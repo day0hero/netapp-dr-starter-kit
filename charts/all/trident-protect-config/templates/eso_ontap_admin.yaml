@@ -1,0 +1,32 @@
+{{- if .Values.tridentProtect.ontapPeering.enabled }}
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: eso-ontap-admin
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  secretStoreRef:
+    name: {{ .Values.secretStoreRef.name }}
+    kind: {{ .Values.secretStoreRef.kind }}
+  target:
+    name: {{ .Values.tridentProtect.ontapPeering.secretName }}
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        username: |-
+          {{ "{{ .username }}" }}
+        password: |-
+          {{ "{{ .password | trim }}" }}
+  data:
+    - secretKey: username
+      remoteRef:
+        key: {{ .Values.tridentProtect.ontapPeering.vaultKey }}
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: {{ .Values.tridentProtect.ontapPeering.vaultKey }}
+        property: content
+{{- end }}

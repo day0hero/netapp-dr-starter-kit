@@ -1,0 +1,143 @@
+{{- if .Values.tridentProtect.ontapPeering.enabled }}
+{{- if and .Values.tridentFSX.clusterLIF .Values.tridentFSX.peer.interclusterIPs }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ontap-peering
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  schedule: {{ .Values.tridentProtect.ontapPeering.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 120
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: ontap-peering
+              image: {{ .Values.tridentProtect.ontapPeering.image }}
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  ONTAP_USER=$(cat /credentials/username)
+                  ONTAP_PASS=$(cat /credentials/password)
+                  AUTH="${ONTAP_USER}:${ONTAP_PASS}"
+
+                  LOCAL_CLUSTER_MGMT="{{ .Values.tridentFSX.clusterLIF }}"
+                  LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
+                  REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
+                  REMOTE_IC_IPS='{{ .Values.tridentFSX.peer.interclusterIPs | toJson }}'
+
+                  api() {
+                    curl -sk -u "${AUTH}" -H "Content-Type: application/json" "$@"
+                  }
+
+                  echo "=== ONTAP Peering Reconcile ($(date -u +%H:%M:%S)) ==="
+                  echo "  Local: ${LOCAL_CLUSTER_MGMT} / ${LOCAL_SVM}"
+                  echo "  Remote SVM: ${REMOTE_SVM}"
+
+                  # ---- Connectivity check ----
+                  HTTP=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 \
+                    -u "${AUTH}" "https://${LOCAL_CLUSTER_MGMT}/api/cluster" 2>/dev/null || echo "000")
+                  if [ "${HTTP}" = "000" ] || [ "${HTTP}" -ge 400 ]; then
+                    echo "Cannot reach ONTAP API (HTTP ${HTTP}) — will retry next schedule"
+                    exit 0
+                  fi
+
+                  # ---- Cluster peering ----
+                  PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers?fields=status,name,uuid")
+                  PEER_COUNT=$(echo "${PEERS}" | jq '.num_records // 0')
+
+                  if [ "${PEER_COUNT}" -gt 0 ]; then
+                    PEER_STATE=$(echo "${PEERS}" | jq -r '.records[0].status.state // "unknown"')
+                    PEER_UUID=$(echo "${PEERS}" | jq -r '.records[0].uuid // empty')
+                    PEER_NAME=$(echo "${PEERS}" | jq -r '.records[0].name // empty')
+                    echo "Cluster peer exists: ${PEER_NAME} (${PEER_STATE})"
+
+                    if [ "${PEER_STATE}" != "available" ]; then
+                      echo "  Peer not yet available — will retry next schedule"
+                      exit 0
+                    fi
+                  else
+                    PASSPHRASE="${ONTAP_PASS}"
+                    echo "Creating cluster peer..."
+                    RESP=$(api -X POST "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers" \
+                      -d "{\"remote\":{\"ip_addresses\":${REMOTE_IC_IPS}},\"authentication\":{\"passphrase\":\"${PASSPHRASE}\"}}" \
+                      -w "\n%{http_code}" 2>/dev/null)
+                    HTTP=$(echo "${RESP}" | tail -1)
+                    BODY=$(echo "${RESP}" | sed '$d')
+                    echo "  HTTP ${HTTP}"
+                    if [ "${HTTP}" -ge 400 ]; then
+                      echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                      echo "  Will retry next schedule"
+                      exit 0
+                    fi
+                    echo "  Cluster peer created — waiting for remote side on next schedule"
+                    exit 0
+                  fi
+
+                  # ---- SVM peering ----
+                  SVM_PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers?fields=state,svm,peer")
+                  SVM_PEER_COUNT=$(echo "${SVM_PEERS}" | jq '.num_records // 0')
+
+                  if [ "${SVM_PEER_COUNT}" -gt 0 ]; then
+                    SVM_STATE=$(echo "${SVM_PEERS}" | jq -r '.records[0].state // "unknown"')
+                    echo "SVM peer exists (${SVM_STATE})"
+
+                    if [ "${SVM_STATE}" = "peered" ]; then
+                      echo "=== Peering fully established ==="
+                      exit 0
+                    fi
+
+                    if [ "${SVM_STATE}" = "initiated" ] || [ "${SVM_STATE}" = "pending" ]; then
+                      echo "  SVM peer in progress — will check again next schedule"
+                      exit 0
+                    fi
+                  fi
+
+                  if [ "${SVM_PEER_COUNT}" -eq 0 ]; then
+                    SVM_PEER_ALIAS="${REMOTE_SVM}"
+                    if [ "${LOCAL_SVM}" = "${REMOTE_SVM}" ]; then
+                      SVM_PEER_ALIAS="${REMOTE_SVM}-${PEER_NAME}"
+                      echo "  Using alias '${SVM_PEER_ALIAS}' (local/remote SVM names match)"
+                    fi
+
+                    echo "Creating SVM peer: ${LOCAL_SVM} <-> ${REMOTE_SVM}..."
+                    RESP=$(api -X POST "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers" \
+                      -d "{\"name\":\"${SVM_PEER_ALIAS}\",\"svm\":{\"name\":\"${LOCAL_SVM}\"},\"peer\":{\"cluster\":{\"uuid\":\"${PEER_UUID}\"},\"svm\":{\"name\":\"${REMOTE_SVM}\"}},\"applications\":[\"snapmirror\"]}" \
+                      -w "\n%{http_code}" 2>/dev/null)
+                    HTTP=$(echo "${RESP}" | tail -1)
+                    BODY=$(echo "${RESP}" | sed '$d')
+                    echo "  HTTP ${HTTP}"
+                    if [ "${HTTP}" -ge 400 ]; then
+                      echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                      echo "  Will retry next schedule"
+                      exit 0
+                    fi
+
+                    if [ "${HTTP}" = "202" ]; then
+                      JOB_UUID=$(echo "${BODY}" | jq -r '.job.uuid // empty')
+                      if [ -n "${JOB_UUID}" ]; then
+                        echo "  Async job ${JOB_UUID} started — will verify next schedule"
+                      fi
+                    fi
+                    exit 0
+                  fi
+
+                  echo "=== Reconcile complete ==="
+              volumeMounts:
+                - name: ontap-creds
+                  mountPath: /credentials
+                  readOnly: true
+          volumes:
+            - name: ontap-creds
+              secret:
+                secretName: {{ .Values.tridentProtect.ontapPeering.secretName }}
+{{- end }}
+{{- end }}

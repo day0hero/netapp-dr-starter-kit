@@ -1,0 +1,52 @@
+---
+# Defaults for fsx_ontap_terraform role
+
+# Terraform source directory (where .tf files live)
+fsx_tf_source: "{{ playbook_dir }}/../terraform/fsx-ontap"
+
+# Working directory base for terraform execution
+# The actual workdir will be: fsx_tf_workdir_base/<file_system_name>
+fsx_tf_workdir_base: "/tmp/netapp-dr-terraform"
+
+# Container configuration for running Terraform
+container_runtime: "podman"
+terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
+
+# Terraform state (S3 backend)
+terraform_state_bucket: ""
+terraform_state_region: ""  # Region where the S3 state bucket lives (must match actual bucket location)
+terraform_state_dynamodb_table: "terraform-state-lock"
+
+# Network Configuration (set by the playbook from cluster_discovery)
+# vpc_id: ""
+# subnet_ids: []
+# route_table_ids: []
+allowed_cidrs: []  # populated by playbook with local + peer VPC CIDRs
+
+# FSx ONTAP Configuration
+storage_capacity: 1024
+throughput_capacity: 1024
+storage_type: "SSD"
+deployment_type: "MULTI_AZ_1"
+weekly_maintenance_time: "7:01:00"
+automatic_backup_retention_days: 3
+daily_automatic_backup_start_time: "01:00"
+
+# SVM Configuration
+svm_name: "SVM1"
+root_volume_security_style: "UNIX"
+
+# Secrets Manager
+create_secrets: true
+
+# Tags
+tags:
+  Environment: "production"
+  ManagedBy: "Terraform"
+
+# Operation mode
+terraform_destroy: false
+
+# Prepare-only mode: setup + init + plan, then export fsx_prepared fact
+# for the caller to run apply in parallel. Skips apply/outputs.
+fsx_prepare_only: false

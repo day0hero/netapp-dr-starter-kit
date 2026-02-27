@@ -1,0 +1,31 @@
+# ExternalSecret Configuration
+secretStoreRef:
+  name: vault-backend
+  kind: ClusterSecretStore
+
+wordpressSecret:
+  name: wordpress-password
+  vaultKey: secret/data/global/wordpress
+  property: password
+
+wordpress:
+  wordpressUsername: admin
+  wordpressBlogName: "Best Blog Ever"
+
+  existingSecret: wordpress-password
+
+  global:
+    storageClass: storage-class-nfs
+    security:
+      allowInsecureImages: true
+
+  image:
+    registry: quay.io
+    repository: validatedpatterns/wordpress
+    tag: 6.9.1
+
+  mariadb:
+    image:
+      registry: quay.io
+      repository: validatedpatterns/mariadb
+      tag: 12.2.2

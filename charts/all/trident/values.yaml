@@ -1,0 +1,33 @@
+# Default values for trident
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# ExternalSecret Configuration
+secretStoreRef:
+  name: vault-backend
+  kind: ClusterSecretStore
+
+# Maps to $gitroot/values-secret.yaml-template declaration
+tridentFSX:
+  key: secret/data/global/fsx-admin
+  backendSecretName: backend-fsxn-secret
+  mgmtLIF: ""
+  svm: ""
+  backends:
+    nfs:
+      storageDriverName: ontap-nas
+      storagePrefix: trident_nfs
+      defaults:
+        snapshotDir: "true"
+        nameTemplate: "{{ .config.StoragePrefix }}_{{ .volume.Namespace }}_{{ .volume.RequestName }}"
+      storageClass:
+        backendType: ontap-nas
+    iscsi:
+      storageDriverName: ontap-san
+      storagePrefix: trident_iscsi
+      storageClass:
+        backendType: ontap-san
+        annotations:
+          storageclass.kubevirt.io/is-default-virt-class: "true"
+        mountOptions:
+          - discard
