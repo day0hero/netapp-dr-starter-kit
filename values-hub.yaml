@@ -50,6 +50,7 @@ clusterGroup:
     trident:
     trident-protect:
     openshift-cnv:
+    wordpress:
   subscriptions:
     acm:
       name: advanced-cluster-management
@@ -131,6 +132,11 @@ clusterGroup:
       namespace: trident-protect
       argoProject: trident
       path: charts/all/trident-protect-config
+    wordpress:
+      name: wordpress
+      namespace: wordpress
+      argoProject: hub
+      path: charts/all/wordpress
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
