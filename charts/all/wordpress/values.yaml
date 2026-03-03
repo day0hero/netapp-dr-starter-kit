@@ -24,6 +24,12 @@ wordpress:
     repository: validatedpatterns/wordpress
     tag: 6.9.1
 
+  ingress:
+    enabled: true
+    hostname: ""
+    pathType: Prefix
+    path: /
+
   mariadb:
     image:
       registry: quay.io
