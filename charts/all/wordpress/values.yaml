@@ -25,10 +25,7 @@ wordpress:
     tag: 6.9.1
 
   ingress:
-    enabled: true
-    hostname: ""
-    pathType: Prefix
-    path: /
+    enabled: false
 
   mariadb:
     image:
