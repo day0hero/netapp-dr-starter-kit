@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cartservice
+  labels:
+    app: cartservice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cartservice
+  labels:
+    app: cartservice
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: 7070
+      targetPort: 7070
+  selector:
+    app: cartservice
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cartservice
+  labels:
+    app: cartservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cartservice
+  template:
+    metadata:
+      labels:
+        app: cartservice
+    spec:
+      serviceAccountName: cartservice
+      securityContext:
+        runAsNonRoot: true
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: server
+          image: "{{ .Values.global.imageRegistry }}/cartservice:{{ .Values.global.imageTag }}"
+          ports:
+            - containerPort: 7070
+          env:
+            - name: REDIS_ADDR
+              value: redis-cart:6379
+          livenessProbe:
+            grpc:
+              port: 7070
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            grpc:
+              port: 7070
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 200m
+              memory: 64Mi
+            limits:
+              cpu: 300m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            privileged: false
+            readOnlyRootFilesystem: true

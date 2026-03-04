@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: adservice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: adservice
+  labels:
+    app: adservice
+spec:
+  type: ClusterIP
+  selector:
+    app: adservice
+  ports:
+    - port: 9555
+      targetPort: 9555
+      name: grpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adservice
+  labels:
+    app: adservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: adservice
+  template:
+    metadata:
+      labels:
+        app: adservice
+    spec:
+      serviceAccountName: adservice
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: server
+          image: "{{ .Values.global.imageRegistry }}/adservice:{{ .Values.global.imageTag }}"
+          ports:
+            - containerPort: 9555
+              name: grpc
+          env:
+            - name: PORT
+              value: "9555"
+          livenessProbe:
+            grpc:
+              port: 9555
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            grpc:
+              port: 9555
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 200m
+              memory: 180Mi
+            limits:
+              cpu: 300m
+              memory: 300Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            privileged: false
+            readOnlyRootFilesystem: true

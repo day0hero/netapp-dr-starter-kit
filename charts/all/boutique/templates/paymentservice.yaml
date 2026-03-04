@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: paymentservice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paymentservice
+  labels:
+    app: paymentservice
+spec:
+  type: ClusterIP
+  selector:
+    app: paymentservice
+  ports:
+    - port: 50051
+      targetPort: 50051
+      name: grpc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paymentservice
+  labels:
+    app: paymentservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: paymentservice
+  template:
+    metadata:
+      labels:
+        app: paymentservice
+    spec:
+      serviceAccountName: paymentservice
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: server
+          image: "{{ .Values.global.imageRegistry }}/paymentservice:{{ .Values.global.imageTag }}"
+          ports:
+            - containerPort: 50051
+              name: grpc
+          env:
+            - name: PORT
+              value: "50051"
+            - name: DISABLE_PROFILER
+              value: "1"
+          livenessProbe:
+            grpc:
+              port: 50051
+          readinessProbe:
+            grpc:
+              port: 50051
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            privileged: false
+            readOnlyRootFilesystem: true

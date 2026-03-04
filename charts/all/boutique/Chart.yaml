@@ -1,0 +1,6 @@
+apiVersion: v2
+name: boutique
+description: Google Online Boutique microservices demo for validated patterns framework
+type: application
+version: 0.1.0
+appVersion: "0.10.4"
