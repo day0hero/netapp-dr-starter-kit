@@ -24,6 +24,9 @@ wordpress:
     repository: validatedpatterns/wordpress
     tag: 6.9.1
 
+  updateStrategy:
+    type: Recreate
+
   ingress:
     enabled: false
 
