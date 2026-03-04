@@ -8,6 +8,12 @@ wordpressSecret:
   vaultKey: secret/data/global/wordpress
   property: password
 
+mariadbSecret:
+  name: wordpress-mariadb
+  vaultKey: secret/data/global/wordpress
+  rootProperty: rootPassword
+  property: mariadbPassword
+
 wordpress:
   wordpressUsername: admin
   wordpressBlogName: "Best Blog Ever"
@@ -25,6 +31,8 @@ wordpress:
     tag: 6.9.1
 
   mariadb:
+    auth:
+      existingSecret: wordpress-mariadb
     image:
       registry: quay.io
       repository: validatedpatterns/mariadb
