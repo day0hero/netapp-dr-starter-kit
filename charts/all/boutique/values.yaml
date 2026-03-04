@@ -1,0 +1,11 @@
+global:
+  imageRegistry: us-central1-docker.pkg.dev/google-samples/microservices-demo
+  imageTag: v0.10.4
+  storageClass: storage-class-iscsi
+
+redis:
+  image: redis:alpine
+  storage: 1Gi
+
+loadgenerator:
+  enabled: true
