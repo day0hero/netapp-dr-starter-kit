@@ -481,6 +481,7 @@
         - name: Set password from ~/.fsx file
           set_fact:
             fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
+            svm_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
           when:
             - _fsx_file_stat.stat.exists | default(false)
             - _fsx_file_content.content is defined
@@ -592,8 +593,18 @@
         mode: "0755"
         content: |
           #!/bin/bash
+          set -o pipefail
           MGMT="${ONTAP_MGMT}"
           AUTH="${ONTAP_AUTH}"
+
+          # Use python for JSON parsing (always available) instead of jq
+          json_val() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)" 2>/dev/null; }
+          json_arr() { python3 -c "import sys,json; d=json.load(sys.stdin)
+          for r in d.get('records',[]): print($1)" 2>/dev/null; }
+
+          api_get()  { curl -sk -u "${AUTH}" "https://${MGMT}$1" 2>/dev/null; }
+          api_del()  { curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}$1" 2>/dev/null; }
+          api_patch() { curl -sk -u "${AUTH}" -X PATCH -H 'Content-Type: application/json' -d "$2" "https://${MGMT}$1" 2>/dev/null; }
 
           echo "=== Testing connectivity to ${MGMT} ==="
           HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
@@ -605,39 +616,99 @@
           fi
           echo "Connected (HTTP ${HTTP_CODE})"
 
-          CL_COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
-            | jq -r '.num_records // 0')
-          if [ "${CL_COUNT}" = "0" ]; then
-            echo "No cluster peers found — nothing to do"
-            exit 0
+          # ---------------------------------------------------------------
+          # 1. Clean up SnapMirror relationships
+          # ---------------------------------------------------------------
+          echo "=== Cleaning up SnapMirror relationships ==="
+          SM_UUIDS=$(api_get "/api/snapmirror/relationships?fields=uuid,state" \
+            | json_arr "r.get('uuid','')")
+
+          if [ -z "${SM_UUIDS}" ]; then
+            echo "  No SnapMirror relationships found"
+          else
+            for SM_UUID in ${SM_UUIDS}; do
+              echo "  Processing SnapMirror ${SM_UUID}..."
+              SM_STATE=$(api_get "/api/snapmirror/relationships/${SM_UUID}" \
+                | json_val "d.get('state','unknown')")
+              echo "    State: ${SM_STATE}"
+
+              if [ "${SM_STATE}" != "broken_off" ] && [ "${SM_STATE}" != "uninitialized" ]; then
+                echo "    Attempting quiesce + break..."
+                api_patch "/api/snapmirror/relationships/${SM_UUID}" '{"state":"paused"}' >/dev/null
+                sleep 3
+                api_patch "/api/snapmirror/relationships/${SM_UUID}" '{"state":"broken_off"}' >/dev/null
+                sleep 2
+              fi
+
+              echo "    Deleting relationship (destination_only)..."
+              RESP=$(api_del "/api/snapmirror/relationships/${SM_UUID}?destination_only=true")
+              ERR=$(echo "${RESP}" | json_val "d.get('error',{}).get('message','')")
+              if [ -n "${ERR}" ]; then
+                echo "    destination_only delete error: ${ERR}"
+                echo "    Trying source_only delete..."
+                api_del "/api/snapmirror/relationships/${SM_UUID}?source_only=true" >/dev/null
+              fi
+            done
+
+            echo "  Polling SnapMirror removal (max 2 min)..."
+            for i in $(seq 1 24); do
+              SM_LEFT=$(api_get "/api/snapmirror/relationships" \
+                | json_val "d.get('num_records',0)")
+              if [ "${SM_LEFT}" = "0" ]; then
+                echo "  All SnapMirror relationships removed"
+                break
+              fi
+              echo "  ${SM_LEFT} relationship(s) remaining (${i}/24)..."
+              sleep 5
+            done
           fi
 
-          echo "=== Waiting for cluster peer connectivity ==="
-          for i in $(seq 1 24); do
-            STATE=$(curl -sk -u "${AUTH}" \
-              "https://${MGMT}/api/cluster/peers?fields=status" 2>/dev/null \
-              | jq -r '.records[0].status.state // "unknown"')
-            if [ "${STATE}" = "available" ]; then
-              echo "  Cluster peer is available"
-              break
-            fi
-            echo "  Cluster peer state: ${STATE} (${i}/24, waiting 10s)..."
-            sleep 10
-          done
+          # ---------------------------------------------------------------
+          # 2. Unmount non-root volumes (preparation for AWS-level deletion)
+          #
+          # Actual volume deletion is handled by the AWS FSx API with
+          # SkipFinalBackup, which correctly removes cloud-backup
+          # (SnapMirror Cloud) protection.  The ONTAP API cannot delete
+          # volumes that have FSx automatic-backup protection.
+          # Unmounting here speeds up the AWS-side delete.
+          # ---------------------------------------------------------------
+          echo "=== Unmounting non-root volumes ==="
+          VOL_LINES=$(api_get "/api/storage/volumes?is_svm_root=false&fields=uuid,name,state,type" \
+            | json_arr "r.get('uuid','')+'|'+r.get('name','')+'|'+r.get('state','')+'|'+r.get('type','')")
 
+          if [ -z "${VOL_LINES}" ]; then
+            echo "  No non-root volumes found"
+          else
+            echo "${VOL_LINES}" | while IFS='|' read -r V_UUID V_NAME V_STATE V_TYPE; do
+              echo "  Volume: ${V_NAME} (${V_UUID}) state=${V_STATE} type=${V_TYPE}"
+
+              if [ "${V_TYPE}" = "dp" ]; then
+                echo "    Converting DP volume to RW..."
+                api_patch "/api/storage/volumes/${V_UUID}" '{"type":"rw"}' >/dev/null 2>&1
+                sleep 1
+              fi
+
+              echo "    Unmounting and offlining..."
+              api_patch "/api/storage/volumes/${V_UUID}" '{"nas":{"path":""}}' >/dev/null 2>&1
+              sleep 1
+              api_patch "/api/storage/volumes/${V_UUID}" '{"state":"offline"}' >/dev/null 2>&1
+            done
+            echo "  Volumes unmounted/offlined (AWS API will handle deletion)"
+          fi
+
+          # ---------------------------------------------------------------
+          # 3. Delete SVM peers
+          # ---------------------------------------------------------------
           echo "=== Deleting SVM peers ==="
-          for UUID in $(curl -sk -u "${AUTH}" \
-            "https://${MGMT}/api/svm/peers?fields=uuid" 2>/dev/null \
-            | jq -r '.records[].uuid // empty'); do
+          for UUID in $(api_get "/api/svm/peers?fields=uuid" \
+            | json_arr "r.get('uuid','')"); do
             echo "  DELETE SVM peer ${UUID}..."
-            curl -sk -u "${AUTH}" -X DELETE \
-              "https://${MGMT}/api/svm/peers/${UUID}" 2>/dev/null | jq -c '.' 2>/dev/null
+            api_del "/api/svm/peers/${UUID}" >/dev/null
           done
 
-          echo "=== Polling SVM peer removal (max 2 min) ==="
+          echo "  Polling SVM peer removal (max 2 min)..."
           for i in $(seq 1 24); do
-            COUNT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
-              | jq -r '.num_records // 0')
+            COUNT=$(api_get "/api/svm/peers" | json_val "d.get('num_records',0)")
             if [ "${COUNT}" = "0" ]; then
               echo "  All SVM peers removed"
               break
@@ -646,17 +717,19 @@
             sleep 5
           done
 
+          # ---------------------------------------------------------------
+          # 4. Delete cluster peers
+          # ---------------------------------------------------------------
           echo "=== Deleting cluster peers ==="
           for ATTEMPT in 1 2 3; do
             REMAINING=0
-            for UUID in $(curl -sk -u "${AUTH}" \
-              "https://${MGMT}/api/cluster/peers?fields=uuid" 2>/dev/null \
-              | jq -r '.records[].uuid // empty'); do
+            for UUID in $(api_get "/api/cluster/peers?fields=uuid" \
+              | json_arr "r.get('uuid','')"); do
               echo "  DELETE cluster peer ${UUID} (attempt ${ATTEMPT})..."
-              RESP=$(curl -sk -u "${AUTH}" -X DELETE \
-                "https://${MGMT}/api/cluster/peers/${UUID}" -w '\n' 2>/dev/null)
-              if echo "${RESP}" | jq -e '.error' >/dev/null 2>&1; then
-                echo "  Error: $(echo "${RESP}" | jq -r '.error.message')"
+              RESP=$(api_del "/api/cluster/peers/${UUID}")
+              ERR=$(echo "${RESP}" | json_val "d.get('error',{}).get('message','')")
+              if [ -n "${ERR}" ]; then
+                echo "  Error: ${ERR}"
                 REMAINING=$((REMAINING + 1))
               fi
             done
@@ -665,11 +738,10 @@
             sleep 10
           done
 
-          SVM_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/svm/peers" 2>/dev/null \
-            | jq -r '.num_records // 0')
-          CL_LEFT=$(curl -sk -u "${AUTH}" "https://${MGMT}/api/cluster/peers" 2>/dev/null \
-            | jq -r '.num_records // 0')
-          echo "=== Done: ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
+          SVM_LEFT=$(api_get "/api/svm/peers" | json_val "d.get('num_records',0)")
+          CL_LEFT=$(api_get "/api/cluster/peers" | json_val "d.get('num_records',0)")
+          VOL_LEFT=$(api_get "/api/storage/volumes?is_svm_root=false" | json_val "d.get('num_records',0)")
+          echo "=== Done: ${VOL_LEFT} volume(s), ${SVM_LEFT} SVM peer(s), ${CL_LEFT} cluster peer(s) remaining ==="
 
     - name: Remove ONTAP peering from Production FSx (running in-cluster pod)
       ansible.builtin.shell: |
@@ -739,6 +811,30 @@
     - name: Skip if not destroying
       meta: end_play
       when: not (destroy_resources | default(false))
+
+    # --- Load FSx password (needed for terraform.tfvars) ---
+    - name: Load FSx password from ~/.fsx file
+      block:
+        - name: Check if ~/.fsx file exists
+          stat:
+            path: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_stat
+
+        - name: Read password from ~/.fsx file
+          slurp:
+            src: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_content
+          when: _fsx_file_stat.stat.exists | default(false)
+
+        - name: Set password from ~/.fsx file
+          set_fact:
+            fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
+            svm_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
+          when:
+            - _fsx_file_stat.stat.exists | default(false)
+            - _fsx_file_content.content is defined
+            - fsx_admin_password is not defined or fsx_admin_password == ''
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
 
     # --- Prepare Production FSx destroy (init, plan) ---
     - name: Prepare Production FSx destroy

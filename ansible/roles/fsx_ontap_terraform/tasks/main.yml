@@ -144,7 +144,6 @@
         src: terraform.tfvars.j2
         dest: "{{ _fsx_workdir }}/terraform.tfvars"
         mode: '0600'
-      when: not (terraform_destroy | default(false))
 
     # Build the container terraform command prefix
     - name: "{{ fsx_label }} - Build terraform container command"
@@ -362,13 +361,185 @@
     - _state_bucket_available or (terraform_state_bucket | default('') | length == 0)
 
 # ---------------------------------------------------------------------------
-# Destroy: Plan phase (runs in both normal and prepare_only mode)
+# Destroy: Clean up non-root volumes before destroying FSx resources.
+# Volumes created by Trident or SnapMirror are not managed by Terraform,
+# and AWS will refuse to delete the SVM while they exist.
 # ---------------------------------------------------------------------------
-- name: "{{ fsx_label }} - Terraform destroy plan"
-  ansible.builtin.shell: "{{ _tf_cmd }} terraform plan -destroy -out=tfplan-destroy -input=false -no-color"
+- name: "{{ fsx_label }} - Delete non-root ONTAP volumes before destroy"
   when:
     - terraform_destroy | default(false)
     - _state_bucket_available or (terraform_state_bucket | default('') | length == 0)
+  block:
+    - name: "{{ fsx_label }} - Look up filesystem ID"
+      ansible.builtin.shell: >-
+        aws fsx describe-file-systems
+        --query "FileSystems[?Tags[?Key=='Name'&&Value=='{{ file_system_name }}']].FileSystemId | [0]"
+        --output text
+        --region {{ cluster_info.region }}
+      environment: "{{ _aws_env }}"
+      register: _destroy_fs_id
+      changed_when: false
+      failed_when: false
+
+    - name: "{{ fsx_label }} - List non-root volumes (any lifecycle state)"
+      ansible.builtin.shell: >-
+        aws fsx describe-volumes
+        --filters Name=file-system-id,Values={{ _destroy_fs_id.stdout | trim }}
+        --query 'Volumes[?OntapConfiguration.StorageVirtualMachineRoot!=`true`].{Id:VolumeId,State:Lifecycle}'
+        --output json
+        --region {{ cluster_info.region }}
+      environment: "{{ _aws_env }}"
+      register: _nonroot_vols
+      changed_when: false
+      failed_when: false
+      when: _destroy_fs_id.stdout | default('') | trim not in ['', 'None']
+
+    - name: "{{ fsx_label }} - Set all non-root volumes"
+      set_fact:
+        _all_nonroot: "{{ (_nonroot_vols.stdout | default('[]', true) | from_json) | default([], true) }}"
+
+    - name: "{{ fsx_label }} - Set deletable volume list"
+      set_fact:
+        _volumes_to_delete: "{{ _all_nonroot | rejectattr('State', 'equalto', 'DELETING') | map(attribute='Id') | list }}"
+
+    - name: "{{ fsx_label }} - Display volumes found"
+      debug:
+        msg:
+          - "Filesystem: {{ _destroy_fs_id.stdout | default('') | trim }}"
+          - "Non-root volumes: {{ _all_nonroot }}"
+          - "Will attempt to delete: {{ _volumes_to_delete }}"
+      when: (_all_nonroot | length) > 0
+
+    - name: "{{ fsx_label }} - Delete non-root volumes via AWS API"
+      ansible.builtin.shell: >-
+        aws fsx delete-volume
+        --volume-id {{ item }}
+        --ontap-configuration '{"SkipFinalBackup":true}'
+        --region {{ cluster_info.region }}
+      environment: "{{ _aws_env }}"
+      loop: "{{ _volumes_to_delete }}"
+      register: _vol_delete
+      failed_when: false
+      when: (_volumes_to_delete | length) > 0
+
+    - name: "{{ fsx_label }} - Display volume delete results"
+      debug:
+        msg: >-
+          {{ item.item }}: rc={{ item.rc }}
+          {{ (item.stderr | default('')) if item.rc != 0 else 'OK' }}
+      loop: "{{ _vol_delete.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when: _vol_delete.results is defined
+
+    - name: "{{ fsx_label }} - Wait for volume deletion (max 10 min)"
+      ansible.builtin.shell: >-
+        aws fsx describe-volumes
+        --filters Name=file-system-id,Values={{ _destroy_fs_id.stdout | trim }}
+        --query 'Volumes[?OntapConfiguration.StorageVirtualMachineRoot!=`true`].VolumeId'
+        --output json
+        --region {{ cluster_info.region }}
+      environment: "{{ _aws_env }}"
+      register: _remaining_vols
+      until: (_remaining_vols.stdout | default('[]') | from_json | length) == 0
+      retries: 40
+      delay: 15
+      changed_when: false
+      failed_when: false
+      when: (_all_nonroot | length) > 0
+
+    - name: "{{ fsx_label }} - Volume cleanup complete"
+      debug:
+        msg: "All non-root volumes deleted for {{ file_system_name }}"
+      when: (_all_nonroot | length) > 0
+
+# ---------------------------------------------------------------------------
+# Destroy: Ensure the SVM is in Terraform state.  A prior run may have
+# removed it (state rm) or state may have drifted.  Without the SVM in
+# state, Terraform tries to delete the filesystem first and AWS rejects
+# that while SVMs still exist.
+# ---------------------------------------------------------------------------
+- name: "{{ fsx_label }} - Ensure SVM is in Terraform state for destroy"
+  when:
+    - terraform_destroy | default(false)
+    - _state_bucket_available or (terraform_state_bucket | default('') | length == 0)
+  block:
+    - name: "{{ fsx_label }} - Check if SVM is in Terraform state"
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform state list 2>/dev/null"
+      register: _tf_pre_destroy_state
+      changed_when: false
+      failed_when: false
+
+    - name: "{{ fsx_label }} - Look up SVM by filesystem name"
+      ansible.builtin.shell: |
+        FS_ID=$(aws fsx describe-file-systems \
+          --query "FileSystems[?Tags[?Key=='Name'&&Value=='{{ file_system_name }}']].FileSystemId | [0]" \
+          --output text --region {{ cluster_info.region }})
+        if [ -n "${FS_ID}" ] && [ "${FS_ID}" != "None" ]; then
+          aws fsx describe-storage-virtual-machines \
+            --query "StorageVirtualMachines[?FileSystemId=='${FS_ID}'].StorageVirtualMachineId | [0]" \
+            --output text --region {{ cluster_info.region }}
+        fi
+      environment: "{{ _aws_env }}"
+      register: _svm_lookup_for_import
+      changed_when: false
+      failed_when: false
+      when: "'aws_fsx_ontap_storage_virtual_machine.this' not in (_tf_pre_destroy_state.stdout | default(''))"
+
+    - name: "{{ fsx_label }} - Re-import SVM into Terraform state"
+      ansible.builtin.shell: >-
+        {{ _tf_cmd }} terraform import -no-color
+        aws_fsx_ontap_storage_virtual_machine.this
+        {{ _svm_lookup_for_import.stdout | trim }}
+      when:
+        - "'aws_fsx_ontap_storage_virtual_machine.this' not in (_tf_pre_destroy_state.stdout | default(''))"
+        - _svm_lookup_for_import.stdout | default('') | trim not in ['', 'None']
+
+    - name: "{{ fsx_label }} - SVM re-import status"
+      debug:
+        msg: >-
+          {{ 'SVM re-imported: ' ~ (_svm_lookup_for_import.stdout | default('') | trim)
+             if ('aws_fsx_ontap_storage_virtual_machine.this' not in (_tf_pre_destroy_state.stdout | default('')))
+             else 'SVM already in state' }}
+
+# ---------------------------------------------------------------------------
+# Destroy: Plan phase (runs in both normal and prepare_only mode)
+#
+# A previous async apply that was interrupted (e.g. its container was killed)
+# can leave a stale DynamoDB lock.  We detect that, force-unlock, and retry.
+# ---------------------------------------------------------------------------
+- name: "{{ fsx_label }} - Terraform destroy plan"
+  when:
+    - terraform_destroy | default(false)
+    - _state_bucket_available or (terraform_state_bucket | default('') | length == 0)
+  block:
+    - name: "{{ fsx_label }} - Terraform destroy plan (attempt)"
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform plan -destroy -out=tfplan-destroy -input=false -no-color"
+      register: _tf_destroy_plan
+      failed_when: false
+
+    - name: "{{ fsx_label }} - Extract stale lock ID"
+      set_fact:
+        _stale_lock_id: "{{ _tf_destroy_plan.stderr | regex_search('ID:\\s+([0-9a-f-]+)', '\\1') | first }}"
+      when:
+        - _tf_destroy_plan.rc != 0
+        - "'Error acquiring the state lock' in _tf_destroy_plan.stderr"
+      failed_when: false
+
+    - name: "{{ fsx_label }} - Force-unlock stale state lock {{ _stale_lock_id | default('') }}"
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform force-unlock -force {{ _stale_lock_id }}"
+      when: _stale_lock_id | default('') | length > 0
+
+    - name: "{{ fsx_label }} - Terraform destroy plan (retry after unlock)"
+      ansible.builtin.shell: "{{ _tf_cmd }} terraform plan -destroy -out=tfplan-destroy -input=false -no-color"
+      when: _stale_lock_id | default('') | length > 0
+
+    - name: "{{ fsx_label }} - Fail if destroy plan failed for non-lock reason"
+      fail:
+        msg: "{{ _tf_destroy_plan.stderr }}"
+      when:
+        - _tf_destroy_plan.rc != 0
+        - _stale_lock_id | default('') | length == 0
 
 # ---------------------------------------------------------------------------
 # Prepare-only mode: export everything needed for the caller to run apply

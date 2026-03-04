@@ -112,7 +112,6 @@
         src: terraform.tfvars.j2
         dest: "{{ vpc_peering_tf_workdir }}/terraform.tfvars"
         mode: '0600'
-      when: not (terraform_destroy | default(false))
 
     # Build the container terraform command prefix
     - name: Build terraform container command
