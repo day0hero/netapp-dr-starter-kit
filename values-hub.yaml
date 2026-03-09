@@ -1,18 +1,18 @@
 # The build-dr make target will update the configuration in tridentFSX
 tridentFSX:
-  mgmtLIF: 198.19.129.196
-  clusterLIF: "198.19.129.163"
+  mgmtLIF: 198.19.101.6
+  clusterLIF: "198.19.101.16"
   svm: SVM1
   interclusterIPs:
-    - 10.0.137.163
-    - 10.0.152.197
+    - 10.0.132.84
+    - 10.0.156.208
   peer:
-    mgmtLIF: "198.19.255.75"
-    clusterLIF: "198.19.255.209"
+    mgmtLIF: "198.19.222.237"
+    clusterLIF: "198.19.222.87"
     svm: SVM1
     interclusterIPs:
-      - 10.100.134.2
-      - 10.100.157.247
+      - 10.100.165.18
+      - 10.100.186.99
 clusterGroup:
   name: hub
   argoCD:
@@ -52,6 +52,7 @@ clusterGroup:
     trident-protect:
     openshift-cnv:
     wordpress:
+    boutique:
   subscriptions:
     acm:
       name: advanced-cluster-management
@@ -66,6 +67,7 @@ clusterGroup:
   argoProjects:
     - hub
     - trident
+    - workload
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
   # We can use self-referential variables because the chart calls the tpl function with these variables defined
   sharedValueFiles:
@@ -136,8 +138,13 @@ clusterGroup:
     wordpress:
       name: wordpress
       namespace: wordpress
-      argoProject: hub
+      argoProject: workload
       path: charts/all/wordpress
+    boutique:
+      name: boutique
+      namespace: boutique
+      argoProject: workload
+      path: charts/all/boutique
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule

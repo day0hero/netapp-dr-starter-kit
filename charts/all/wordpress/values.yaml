@@ -20,6 +20,17 @@ wordpress:
 
   existingSecret: wordpress-password
 
+  updateStrategy:
+    type: Recreate
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
   global:
     storageClass: storage-class-nfs
     security:
@@ -29,11 +40,23 @@ wordpress:
     registry: quay.io
     repository: validatedpatterns/wordpress
     tag: 6.9.1
+    debug: true
 
   mariadb:
     auth:
       existingSecret: wordpress-mariadb
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 768Mi
     image:
       registry: quay.io
       repository: validatedpatterns/mariadb
       tag: 12.2.2
+
+  ingress:
+    enabled: false
+
