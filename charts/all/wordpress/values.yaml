@@ -31,10 +31,6 @@ wordpress:
       cpu: "1"
       memory: 768Mi
 
-  extraEnvVars:
-    - name: BITNAMI_DEBUG
-      value: "true"
-
   global:
     storageClass: storage-class-nfs
     security:
@@ -44,6 +40,7 @@ wordpress:
     registry: quay.io
     repository: validatedpatterns/wordpress
     tag: 6.9.1
+    debug: true
 
   mariadb:
     auth:
