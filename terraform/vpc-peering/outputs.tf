@@ -25,14 +25,14 @@ output "dr_to_prod_routes" {
 output "summary" {
   description = "Summary of the VPC peering configuration"
   value = {
-    peering_id         = aws_vpc_peering_connection.prod_to_dr.id
-    prod_vpc_id        = var.prod_vpc_id
-    prod_vpc_cidr      = var.prod_vpc_cidr
-    prod_region        = var.prod_region
-    dr_vpc_id          = var.dr_vpc_id
-    dr_vpc_cidr        = var.dr_vpc_cidr
-    dr_region          = var.dr_region
-    prod_routes_count  = length(aws_route.prod_to_dr)
-    dr_routes_count    = length(aws_route.dr_to_prod)
+    peering_id        = aws_vpc_peering_connection.prod_to_dr.id
+    prod_vpc_id       = var.prod_vpc_id
+    prod_vpc_cidr     = var.prod_vpc_cidr
+    prod_region       = var.prod_region
+    dr_vpc_id         = var.dr_vpc_id
+    dr_vpc_cidr       = var.dr_vpc_cidr
+    dr_region         = var.dr_region
+    prod_routes_count = length(aws_route.prod_to_dr)
+    dr_routes_count   = length(aws_route.dr_to_prod)
   }
 }

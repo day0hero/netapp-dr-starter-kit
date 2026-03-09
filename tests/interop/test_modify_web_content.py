@@ -15,9 +15,7 @@ from . import __loggername__
 logger = logging.getLogger(__loggername__)
 
 # Configurable timeout settings (can be overridden via environment)
-CONTENT_UPDATE_TIMEOUT_MINUTES = int(
-    os.environ.get("CONTENT_UPDATE_TIMEOUT_MINUTES", "10")
-)
+CONTENT_UPDATE_TIMEOUT_MINUTES = int(os.environ.get("CONTENT_UPDATE_TIMEOUT_MINUTES", "10"))
 CONTENT_UPDATE_POLL_SECONDS = int(os.environ.get("CONTENT_UPDATE_POLL_SECONDS", "30"))
 
 # Configurable repository path (can be overridden via environment)
@@ -53,25 +51,19 @@ def test_modify_web_content(openshift_dyn_client):
     logger.info(f"Current page content: {response.content}")
 
     if os.getenv("EXTERNAL_TEST") != "true":
-        chart = os.path.join(
-            PATTERNS_REPO_PATH, "charts/all/hello-world/templates/hello-world-cm.yaml"
-        )
+        chart = os.path.join(PATTERNS_REPO_PATH, "charts/all/hello-world/templates/hello-world-cm.yaml")
     else:
         chart = "../../charts/all/hello-world/templates/hello-world-cm.yaml"
 
     logger.info("Modify the file content")
     orig_heading = "<h1>Hello World!</h1>"
     new_heading = "<h1>Validated Patterns QE was here!</h1>"
-    modify_file_content(
-        file_name=chart, orig_content=orig_heading, new_content=new_heading
-    )
+    modify_file_content(file_name=chart, orig_content=orig_heading, new_content=new_heading)
 
     logger.info("Merge the change")
     patterns_repo = PATTERNS_REPO_PATH
     if os.getenv("EXTERNAL_TEST") != "true":
-        git_add = subprocess.run(
-            ["git", "add", chart], cwd=patterns_repo, capture_output=True, text=True
-        )
+        git_add = subprocess.run(["git", "add", chart], cwd=patterns_repo, capture_output=True, text=True)
         if git_add.returncode != 0:
             logger.error(f"git add failed: {git_add.stderr}")
 
@@ -84,9 +76,7 @@ def test_modify_web_content(openshift_dyn_client):
         if git_commit.returncode != 0:
             logger.warning(f"git commit returned non-zero: {git_commit.stderr}")
 
-        push = subprocess.run(
-            ["git", "push"], cwd=patterns_repo, capture_output=True, text=True
-        )
+        push = subprocess.run(["git", "push"], cwd=patterns_repo, capture_output=True, text=True)
     else:
         git_add = subprocess.run(["git", "add", chart], capture_output=True, text=True)
         if git_add.returncode != 0:

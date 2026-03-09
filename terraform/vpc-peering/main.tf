@@ -6,17 +6,6 @@
 # peering connection.
 # -----------------------------------------------------------------------------
 
-# Data sources to validate the VPCs exist
-data "aws_vpc" "prod" {
-  provider = aws.prod
-  id       = var.prod_vpc_id
-}
-
-data "aws_vpc" "dr" {
-  provider = aws.dr
-  id       = var.dr_vpc_id
-}
-
 # -----------------------------------------------------------------------------
 # VPC Peering Connection (initiated from prod side)
 # -----------------------------------------------------------------------------

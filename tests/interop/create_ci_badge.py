@@ -34,9 +34,7 @@ def get_openshift_version():
         None: on any error
     """
     try:
-        version_ret = subprocess.run(
-            [oc, "version", "-o", "json"], capture_output=True, check=False
-        )
+        version_ret = subprocess.run([oc, "version", "-o", "json"], capture_output=True, check=False)
         if version_ret.returncode != 0:
             print(f"Error running oc version: {version_ret.stderr.decode('utf-8')}")
             return None
@@ -57,12 +55,8 @@ if __name__ == "__main__":
 
     ci_badge["openshiftVersion"] = versions[0]
 
-    pattern_repo = subprocess.run(
-        ["git", "config", "--get", "remote.origin.url"], capture_output=True, text=True
-    )
-    pattern_branch = subprocess.run(
-        ["git", "branch", "--show-current"], capture_output=True, text=True
-    )
+    pattern_repo = subprocess.run(["git", "config", "--get", "remote.origin.url"], capture_output=True, text=True)
+    pattern_branch = subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True)
 
     ci_badge["patternRepo"] = pattern_repo.stdout.strip()
     ci_badge["patternBranch"] = pattern_branch.stdout.strip()
@@ -106,14 +100,7 @@ if __name__ == "__main__":
         print("INFRA_PROVIDER environment variable is not set, exiting")
         sys.exit(1)
 
-    ci_badge_json_basename = (
-        pattern_shortname
-        + "-"
-        + infra_provider
-        + "-"
-        + versions[1]
-        + "-stable-badge.json"
-    )
+    ci_badge_json_basename = pattern_shortname + "-" + infra_provider + "-" + versions[1] + "-stable-badge.json"
     ci_badge_json_filename = os.path.join(results_dir, ci_badge_json_basename)
     print(f"Creating CI badge file at: {ci_badge_json_filename}")
 

@@ -44,7 +44,7 @@ For each cluster, the following values are looked up automatically from the Kube
 (all can be overridden via variables):
 
 | Value | Source | Override Variable |
-|-------|--------|-------------------|
+| ----- | ------ | ----------------- |
 | Cluster name | `infrastructure/cluster .status.infrastructureName` | `PROD_CLUSTER` / `DR_CLUSTER` |
 | AWS region | `infrastructure/cluster .status.platformStatus.aws.region` | `PROD_REGION` / `DR_REGION` |
 | VPC CIDR | `cm/cluster-config-v1` in `kube-system` (networking.machineNetwork) | `PROD_VPC_CIDR` / `DR_VPC_CIDR` |
@@ -53,7 +53,7 @@ For each cluster, the following values are looked up automatically from the Kube
 ## Make Targets
 
 | Target | Description |
-|--------|-------------|
+| ------ | ----------- |
 | `make build-dr` | Build complete DR infrastructure (VPC peering + FSx in both regions) |
 | `make destroy-dr` | Destroy all DR infrastructure |
 | `make setup-terraform-state` | Create S3 bucket for Terraform state storage |
@@ -62,14 +62,14 @@ For each cluster, the following values are looked up automatically from the Kube
 ### Required Variables
 
 | Variable | Description |
-|----------|-------------|
+| -------- | ----------- |
 | `PROD_KUBECONFIG` | Path to production cluster kubeconfig |
 | `DR_KUBECONFIG` | Path to DR cluster kubeconfig |
 
 ### Optional Overrides
 
 | Variable | Description |
-|----------|-------------|
+| -------- | ----------- |
 | `PROD_CLUSTER` | Production cluster infrastructure name |
 | `DR_CLUSTER` | DR cluster infrastructure name |
 | `PROD_REGION` | Production AWS region |
@@ -80,7 +80,7 @@ For each cluster, the following values are looked up automatically from the Kube
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────┐          ┌─────────────────────────────┐
 │   Production Region         │          │   DR Region                 │
 │                             │          │                             │
@@ -102,12 +102,14 @@ For each cluster, the following values are looked up automatically from the Kube
 FSx and SVM admin passwords can be provided via:
 
 1. **`~/.fsx` file** (recommended):
+
    ```bash
    echo "MySecurePassword123!" > ~/.fsx
    chmod 600 ~/.fsx
    ```
 
 2. **Command line**:
+
    ```bash
    make build-dr ... EXTRA_PLAYBOOK_OPTS="-e fsx_admin_password=MyPassword -e svm_admin_password=MyPassword"
    ```
@@ -126,13 +128,14 @@ make build-dr ... TERRAFORM_STATE_BUCKET=my-tf-state
 ```
 
 State is scoped per component and cluster:
+
 - VPC peering: `vpc-peering/terraform.tfstate`
 - Prod FSx: `fsx-ontap/<cluster>/<region>/terraform.tfstate`
 - DR FSx: `fsx-ontap/<cluster>/<region>/terraform.tfstate`
 
 ## Project Structure
 
-```
+```text
 ├── ansible/
 │   ├── dr-setup.yaml              # Main playbook
 │   ├── dr-vars.yml                # Default variables

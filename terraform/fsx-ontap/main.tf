@@ -2,9 +2,6 @@
 # FSx for NetApp ONTAP Terraform Module
 # -----------------------------------------------------------------------------
 
-# Data source to get current AWS account ID
-data "aws_caller_identity" "current" {}
-
 # -----------------------------------------------------------------------------
 # Security Group for FSx ONTAP
 # -----------------------------------------------------------------------------
@@ -336,10 +333,10 @@ resource "aws_fsx_ontap_file_system" "this" {
   # Route table IDs are required for MULTI_AZ_1
   route_table_ids = var.deployment_type == "MULTI_AZ_1" ? var.route_table_ids : null
 
-  fsx_admin_password                  = var.fsx_admin_password
-  weekly_maintenance_start_time       = var.weekly_maintenance_time
-  automatic_backup_retention_days     = var.automatic_backup_retention_days
-  daily_automatic_backup_start_time   = var.daily_automatic_backup_start_time
+  fsx_admin_password                = var.fsx_admin_password
+  weekly_maintenance_start_time     = var.weekly_maintenance_time
+  automatic_backup_retention_days   = var.automatic_backup_retention_days
+  daily_automatic_backup_start_time = var.daily_automatic_backup_start_time
 
   tags = merge(var.tags, {
     Name = var.file_system_name

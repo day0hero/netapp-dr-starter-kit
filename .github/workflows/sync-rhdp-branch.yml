@@ -1,5 +1,5 @@
 # This is a job to be run in the validatedpatterns organization only.
-# It tries to keep the rhdp-deploy branch uptodate by creating a PR from main
+# It tries to keep the rhdp-deploy branch up-to-date by creating a PR from main
 ---
 name: Sync main to rhdp-deploy
 on:
@@ -18,11 +18,11 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 20
       - name: Opening pull request

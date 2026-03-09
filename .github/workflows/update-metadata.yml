@@ -13,7 +13,7 @@ on:
 
 jobs:
   update-metadata:
-    uses: validatedpatterns/docs/.github/workflows/metadata-docs.yml@main
+    uses: validatedpatterns/docs/.github/workflows/metadata-docs.yml@7ac8632e38c2b7e35daa5fdbc3cb9c27c65b7c50 # main
     permissions: # Workflow-level permissions
       contents: read  # Required for "read-all"
       packages: write # Allows writing to packages
