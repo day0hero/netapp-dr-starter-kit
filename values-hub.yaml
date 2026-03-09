@@ -67,7 +67,7 @@ clusterGroup:
   argoProjects:
     - hub
     - trident
-    - boutique
+    - containerWorkload
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
   # We can use self-referential variables because the chart calls the tpl function with these variables defined
   sharedValueFiles:
@@ -138,12 +138,12 @@ clusterGroup:
     wordpress:
       name: wordpress
       namespace: wordpress
-      argoProject: hub
+      argoProject: containerWorkload
       path: charts/all/wordpress
     boutique:
       name: boutique
       namespace: boutique
-      argoProject: boutique
+      argoProject: containerWorkload
       path: charts/all/boutique
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
