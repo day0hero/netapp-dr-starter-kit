@@ -8,7 +8,7 @@ bucket_name         = "{{ terraform_state_bucket }}"
 dynamodb_table_name = "{{ terraform_state_dynamodb_table }}"
 
 tags = {
-{% for key, value in tags.items() %}
+{% for key, value in terraform_state_tags.items() %}
   {{ key }} = "{{ value }}"
 {% endfor %}
 }

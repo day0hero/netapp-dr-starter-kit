@@ -56,27 +56,27 @@ terraform_state_dynamodb_table: "terraform-state-lock"
 # prod_file_system_name: ""
 # dr_file_system_name: ""
 
-storage_capacity: 1024        # GiB (minimum 1024)
-throughput_capacity: 1024      # MBps (128, 256, 512, 1024, 2048, 4096)
-storage_type: "SSD"            # SSD or HDD
-deployment_type: "MULTI_AZ_1"  # MULTI_AZ_1 or SINGLE_AZ_1
-weekly_maintenance_time: "7:01:00"  # d:HH:MM (UTC)
+fsx_ontap_terraform_storage_capacity: 1024        # GiB (minimum 1024)
+fsx_ontap_terraform_throughput_capacity: 1024      # MBps (128, 256, 512, 1024, 2048, 4096)
+fsx_ontap_terraform_storage_type: "SSD"            # SSD or HDD
+fsx_ontap_terraform_deployment_type: "MULTI_AZ_1"  # MULTI_AZ_1 or SINGLE_AZ_1
+fsx_ontap_terraform_weekly_maintenance_time: "7:01:00"  # d:HH:MM (UTC)
 
 # FSx passwords (read from ~/.fsx if not set)
 # fsx_admin_password: ""
 # svm_admin_password: ""
 
 # SVM Configuration
-svm_name: "SVM1"
-root_volume_security_style: "UNIX"
+fsx_ontap_terraform_svm_name: "SVM1"
+fsx_ontap_terraform_root_volume_security_style: "UNIX"
 
 # Secrets Manager
-create_secrets: true
+fsx_ontap_terraform_create_secrets: true
 
 # -----------------------------------------------------------------------------
 # Tags
 # -----------------------------------------------------------------------------
-tags:
+resource_tags:
   Environment: "production"
   ManagedBy: "Terraform"
   Purpose: "NetApp-DR"

@@ -8,8 +8,8 @@ terraform_state_tf_source: "{{ playbook_dir }}/../terraform/terraform-state"
 terraform_state_tf_workdir: "/tmp/netapp-dr-terraform/terraform-state"
 
 # Container configuration
-container_runtime: "podman"
-terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
+terraform_state_container_runtime: "podman"
+terraform_state_terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
 
 # S3 bucket name (read from values-trident.yaml by playbook)
 # terraform_state_bucket: ""
@@ -18,6 +18,6 @@ terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
 terraform_state_dynamodb_table: "terraform-state-lock"
 
 # Tags
-tags:
+terraform_state_tags:
   ManagedBy: "Terraform"
   Purpose: "Terraform-State-Backend"

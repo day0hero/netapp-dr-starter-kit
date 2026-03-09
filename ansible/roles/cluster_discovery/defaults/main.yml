@@ -4,17 +4,20 @@
 # All of these can be overridden to skip auto-detection.
 # When an override is set, the corresponding cluster query is skipped.
 
+# Label for this cluster (used in task names and display)
+# cluster_discovery_label: ""
+
 # Path to the kubeconfig for this cluster (required)
-# kubeconfig: ""
+# cluster_discovery_kubeconfig: ""
 
 # Override: cluster infrastructure name (from infrastructure/cluster .status.infrastructureName)
-# cluster_name_override: ""
+# cluster_discovery_name_override: ""
 
 # Override: AWS region
-# cluster_region_override: ""
+# cluster_discovery_region_override: ""
 
 # Override: VPC CIDR (from cm/cluster-config-v1 networking.machineNetwork)
-# cluster_vpc_cidr_override: ""
+# cluster_discovery_vpc_cidr_override: ""
 
 # Override: VPC name (defaults to infrastructureName + "-vpc")
-# cluster_vpc_name_override: ""
+# cluster_discovery_vpc_name_override: ""

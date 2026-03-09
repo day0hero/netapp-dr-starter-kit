@@ -4,38 +4,38 @@
 # -----------------------------------------------------------------------------
 
 # AWS Configuration
-aws_region = "{{ cluster_info.region }}"
+aws_region = "{{ fsx_ontap_terraform_cluster_info.region }}"
 
 # Network Configuration
-vpc_id          = "{{ cluster_info.vpc_id }}"
-subnet_ids      = {{ cluster_info.subnet_ids[:2] | to_json }}
-route_table_ids = {{ cluster_info.route_table_ids | to_json }}
-allowed_cidrs   = {{ allowed_cidrs | to_json }}
+vpc_id          = "{{ fsx_ontap_terraform_cluster_info.vpc_id }}"
+subnet_ids      = {{ fsx_ontap_terraform_cluster_info.subnet_ids[:2] | to_json }}
+route_table_ids = {{ fsx_ontap_terraform_cluster_info.route_table_ids | to_json }}
+allowed_cidrs   = {{ fsx_ontap_terraform_allowed_cidrs | to_json }}
 
 # FSx ONTAP Configuration
-file_system_name                  = "{{ file_system_name }}"
-storage_capacity                  = {{ storage_capacity }}
-throughput_capacity               = {{ throughput_capacity }}
-storage_type                      = "{{ storage_type }}"
-deployment_type                   = "{{ deployment_type }}"
-weekly_maintenance_time           = "{{ weekly_maintenance_time }}"
-automatic_backup_retention_days   = {{ automatic_backup_retention_days }}
-daily_automatic_backup_start_time = "{{ daily_automatic_backup_start_time }}"
+file_system_name                  = "{{ fsx_ontap_terraform_file_system_name }}"
+storage_capacity                  = {{ fsx_ontap_terraform_storage_capacity }}
+throughput_capacity               = {{ fsx_ontap_terraform_throughput_capacity }}
+storage_type                      = "{{ fsx_ontap_terraform_storage_type }}"
+deployment_type                   = "{{ fsx_ontap_terraform_deployment_type }}"
+weekly_maintenance_time           = "{{ fsx_ontap_terraform_weekly_maintenance_time }}"
+automatic_backup_retention_days   = {{ fsx_ontap_terraform_automatic_backup_retention_days }}
+daily_automatic_backup_start_time = "{{ fsx_ontap_terraform_daily_automatic_backup_start_time }}"
 
 # Passwords
 fsx_admin_password = "{{ fsx_admin_password }}"
 svm_admin_password = "{{ svm_admin_password }}"
 
 # SVM Configuration
-svm_name                   = "{{ svm_name }}"
-root_volume_security_style = "{{ root_volume_security_style }}"
+svm_name                   = "{{ fsx_ontap_terraform_svm_name }}"
+root_volume_security_style = "{{ fsx_ontap_terraform_root_volume_security_style }}"
 
 # Secrets Manager
-create_secrets = {{ create_secrets | lower }}
+create_secrets = {{ fsx_ontap_terraform_create_secrets | lower }}
 
 # Tags
 tags = {
-{% for key, value in tags.items() %}
+{% for key, value in fsx_ontap_terraform_tags.items() %}
   {{ key }} = "{{ value }}"
 {% endfor %}
 }

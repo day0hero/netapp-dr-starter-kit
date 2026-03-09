@@ -5,10 +5,10 @@
 
 terraform {
   backend "s3" {
-    bucket         = "{{ terraform_state_bucket }}"
-    key            = "{{ _terraform_state_key }}"
-    region         = "{{ terraform_state_region }}"
+    bucket         = "{{ fsx_ontap_terraform_state_bucket }}"
+    key            = "{{ fsx_ontap_terraform_state_key }}"
+    region         = "{{ fsx_ontap_terraform_state_region }}"
     encrypt        = true
-    dynamodb_table = "{{ terraform_state_dynamodb_table }}"
+    dynamodb_table = "{{ fsx_ontap_terraform_state_dynamodb_table }}"
   }
 }

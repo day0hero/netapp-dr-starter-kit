@@ -5,10 +5,10 @@
 
 terraform {
   backend "s3" {
-    bucket         = "{{ terraform_state_bucket }}"
-    key            = "{{ terraform_state_key }}"
+    bucket         = "{{ vpc_peering_terraform_state_bucket }}"
+    key            = "{{ vpc_peering_terraform_state_key }}"
     region         = "{{ prod_cluster.region }}"
     encrypt        = true
-    dynamodb_table = "{{ terraform_state_dynamodb_table }}"
+    dynamodb_table = "{{ vpc_peering_terraform_state_dynamodb_table }}"
   }
 }

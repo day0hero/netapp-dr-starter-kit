@@ -29,37 +29,37 @@
   gather_facts: false
   tasks:
     - name: Load values-trident.yaml
-      set_fact:
+      ansible.builtin.set_fact:
         _values_trident: "{{ lookup('file', playbook_dir ~ '/../values-trident.yaml') | from_yaml }}"
 
     - name: Set terraform state bucket from values-trident.yaml
-      set_fact:
+      ansible.builtin.set_fact:
         terraform_state_bucket: "{{ terraform_state_bucket | default(_values_trident.terraform.state.bucket) }}"
         cacheable: true
 
     - name: Display state bucket
-      debug:
+      ansible.builtin.debug:
         msg: "Terraform state bucket (from values-trident.yaml): {{ terraform_state_bucket }}"
 
     - name: Validate prod_kubeconfig is provided
-      fail:
+      ansible.builtin.fail:
         msg: "prod_kubeconfig is required. Pass it via -e prod_kubeconfig=/path/to/kubeconfig"
       when: prod_kubeconfig is not defined or prod_kubeconfig == ''
 
     - name: Discover production cluster
-      include_role:
+      ansible.builtin.include_role:
         name: cluster_discovery
       vars:
-        kubeconfig: "{{ prod_kubeconfig }}"
-        cluster_label: "Production"
-        cluster_name_override: "{{ prod_cluster_name_override | default('') }}"
-        cluster_region_override: "{{ prod_region_override | default('') }}"
-        cluster_vpc_cidr_override: "{{ prod_vpc_cidr_override | default('') }}"
-        cluster_vpc_name_override: "{{ prod_vpc_name_override | default('') }}"
+        cluster_discovery_kubeconfig: "{{ prod_kubeconfig }}"
+        cluster_discovery_label: "Production"
+        cluster_discovery_name_override: "{{ prod_cluster_name_override | default('') }}"
+        cluster_discovery_region_override: "{{ prod_region_override | default('') }}"
+        cluster_discovery_vpc_cidr_override: "{{ prod_vpc_cidr_override | default('') }}"
+        cluster_discovery_vpc_name_override: "{{ prod_vpc_name_override | default('') }}"
 
     - name: Store production cluster info
-      set_fact:
-        prod_cluster: "{{ discovered_cluster }}"
+      ansible.builtin.set_fact:
+        prod_cluster: "{{ cluster_discovery_result }}"
         cacheable: true
 
 # -----------------------------------------------------------------------------
@@ -70,24 +70,24 @@
   gather_facts: false
   tasks:
     - name: Validate dr_kubeconfig is provided
-      fail:
+      ansible.builtin.fail:
         msg: "dr_kubeconfig is required. Pass it via -e dr_kubeconfig=/path/to/kubeconfig"
       when: dr_kubeconfig is not defined or dr_kubeconfig == ''
 
     - name: Discover DR cluster
-      include_role:
+      ansible.builtin.include_role:
         name: cluster_discovery
       vars:
-        kubeconfig: "{{ dr_kubeconfig }}"
-        cluster_label: "DR"
-        cluster_name_override: "{{ dr_cluster_name_override | default('') }}"
-        cluster_region_override: "{{ dr_region_override | default('') }}"
-        cluster_vpc_cidr_override: "{{ dr_vpc_cidr_override | default('') }}"
-        cluster_vpc_name_override: "{{ dr_vpc_name_override | default('') }}"
+        cluster_discovery_kubeconfig: "{{ dr_kubeconfig }}"
+        cluster_discovery_label: "DR"
+        cluster_discovery_name_override: "{{ dr_cluster_name_override | default('') }}"
+        cluster_discovery_region_override: "{{ dr_region_override | default('') }}"
+        cluster_discovery_vpc_cidr_override: "{{ dr_vpc_cidr_override | default('') }}"
+        cluster_discovery_vpc_name_override: "{{ dr_vpc_name_override | default('') }}"
 
     - name: Store DR cluster info
-      set_fact:
-        dr_cluster: "{{ discovered_cluster }}"
+      ansible.builtin.set_fact:
+        dr_cluster: "{{ cluster_discovery_result }}"
         cacheable: true
 
 # -----------------------------------------------------------------------------
@@ -100,14 +100,15 @@
   gather_facts: false
   tasks:
     - name: Skip state backend creation if destroying
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: destroy_resources | default(false)
 
     - name: Create S3 bucket and DynamoDB table for Terraform state
-      include_role:
+      ansible.builtin.include_role:
         name: terraform_state
       vars:
         terraform_state_region: "{{ prod_cluster.region }}"
+        terraform_state_tags: "{{ resource_tags }}"
 
 # -----------------------------------------------------------------------------
 # Play 4: VPC Peering (create only — destroy is in the destroy sequence)
@@ -117,11 +118,11 @@
   gather_facts: false
   tasks:
     - name: Skip VPC peering if destroying
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: destroy_resources | default(false)
 
     - name: Display peering summary
-      debug:
+      ansible.builtin.debug:
         msg:
           - "=========================================="
           - "VPC Peering Setup"
@@ -131,8 +132,12 @@
           - "=========================================="
 
     - name: Peer VPCs via Terraform
-      include_role:
+      ansible.builtin.include_role:
         name: vpc_peering_terraform
+      vars:
+        vpc_peering_terraform_state_bucket: "{{ terraform_state_bucket }}"
+        vpc_peering_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        vpc_peering_terraform_tags: "{{ resource_tags }}"
 
 # -----------------------------------------------------------------------------
 # Play 5: Create FSx ONTAP in Both Regions (parallel)
@@ -146,35 +151,35 @@
   gather_facts: false
   tasks:
     - name: Skip FSx creation if destroy is requested
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: destroy_resources | default(false)
 
     # --- Load FSx password ---
     - name: Load FSx password from ~/.fsx file
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
       block:
         - name: Check if ~/.fsx file exists
-          stat:
+          ansible.builtin.stat:
             path: "{{ '~/.fsx' | expanduser }}"
           register: _fsx_file_stat
 
         - name: Read password from ~/.fsx file
-          slurp:
+          ansible.builtin.slurp:
             src: "{{ '~/.fsx' | expanduser }}"
           register: _fsx_file_content
           when: _fsx_file_stat.stat.exists | default(false)
 
         - name: Set password from ~/.fsx file
-          set_fact:
+          ansible.builtin.set_fact:
             fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
             svm_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
           when:
             - _fsx_file_stat.stat.exists | default(false)
             - _fsx_file_content.content is defined
             - fsx_admin_password is not defined or fsx_admin_password == ''
-      when: fsx_admin_password is not defined or fsx_admin_password == ''
 
     - name: Validate FSx password is set
-      fail:
+      ansible.builtin.fail:
         msg: |
           fsx_admin_password is required but not found.
           Please either:
@@ -184,45 +189,51 @@
 
     # --- Prepare Production FSx (setup, init, plan) ---
     - name: Prepare Production FSx ONTAP
-      include_role:
+      ansible.builtin.include_role:
         name: fsx_ontap_terraform
       vars:
-        cluster_info: "{{ prod_cluster }}"
-        fsx_label: "Production FSx"
-        file_system_name_override: "{{ prod_file_system_name | default('') }}"
-        terraform_state_region: "{{ prod_cluster.region }}"
-        svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
-        allowed_cidrs:
+        fsx_ontap_terraform_cluster_info: "{{ prod_cluster }}"
+        fsx_ontap_terraform_label: "Production FSx"
+        fsx_ontap_terraform_file_system_name_override: "{{ prod_file_system_name | default('') }}"
+        fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
+        fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
+        fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        fsx_ontap_terraform_svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_allowed_cidrs:
           - "{{ prod_cluster.vpc_cidr }}"
           - "{{ dr_cluster.vpc_cidr }}"
-        fsx_prepare_only: true
+        fsx_ontap_terraform_tags: "{{ resource_tags }}"
+        fsx_ontap_terraform_prepare_only: true
 
     - name: Save Production FSx prepared state
-      set_fact:
-        _prod_fsx_prepared: "{{ fsx_prepared }}"
+      ansible.builtin.set_fact:
+        _prod_fsx_prepared: "{{ fsx_ontap_terraform_prepared }}"
 
     # --- Prepare DR FSx (setup, init, plan) ---
     - name: Prepare DR FSx ONTAP
-      include_role:
+      ansible.builtin.include_role:
         name: fsx_ontap_terraform
       vars:
-        cluster_info: "{{ dr_cluster }}"
-        fsx_label: "DR FSx"
-        file_system_name_override: "{{ dr_file_system_name | default('') }}"
-        terraform_state_region: "{{ prod_cluster.region }}"
-        svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
-        allowed_cidrs:
+        fsx_ontap_terraform_cluster_info: "{{ dr_cluster }}"
+        fsx_ontap_terraform_label: "DR FSx"
+        fsx_ontap_terraform_file_system_name_override: "{{ dr_file_system_name | default('') }}"
+        fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
+        fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
+        fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        fsx_ontap_terraform_svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_allowed_cidrs:
           - "{{ dr_cluster.vpc_cidr }}"
           - "{{ prod_cluster.vpc_cidr }}"
-        fsx_prepare_only: true
+        fsx_ontap_terraform_tags: "{{ resource_tags }}"
+        fsx_ontap_terraform_prepare_only: true
 
     - name: Save DR FSx prepared state
-      set_fact:
-        _dr_fsx_prepared: "{{ fsx_prepared }}"
+      ansible.builtin.set_fact:
+        _dr_fsx_prepared: "{{ fsx_ontap_terraform_prepared }}"
 
     # --- Apply both in parallel ---
     - name: Display parallel apply notice
-      debug:
+      ansible.builtin.debug:
         msg:
           - "=========================================="
           - "Applying FSx ONTAP in PARALLEL"
@@ -233,17 +244,19 @@
           - "=========================================="
 
     - name: Apply FSx ONTAP - Production (async)
-      ansible.builtin.shell: "{{ _prod_fsx_prepared.apply_cmd }}"
+      ansible.builtin.shell: "{{ _prod_fsx_prepared.apply_cmd }}"  # noqa: command-instead-of-shell
       async: 3600
       poll: 0
       register: _prod_fsx_job
+      changed_when: true
       when: not (_prod_fsx_prepared.skipped | default(false))
 
     - name: Apply FSx ONTAP - DR (async)
-      ansible.builtin.shell: "{{ _dr_fsx_prepared.apply_cmd }}"
+      ansible.builtin.shell: "{{ _dr_fsx_prepared.apply_cmd }}"  # noqa: command-instead-of-shell
       async: 3600
       poll: 0
       register: _dr_fsx_job
+      changed_when: true
       when: not (_dr_fsx_prepared.skipped | default(false))
 
     # --- Wait for both to complete ---
@@ -267,20 +280,20 @@
 
     # --- Get outputs ---
     - name: Get Production FSx outputs
-      ansible.builtin.shell: "{{ _prod_fsx_prepared.output_cmd }}"
+      ansible.builtin.shell: "{{ _prod_fsx_prepared.output_cmd }}"  # noqa: command-instead-of-shell
       register: _prod_fsx_outputs_raw
       changed_when: false
       when: not (_prod_fsx_prepared.skipped | default(false))
 
     - name: Get DR FSx outputs
-      ansible.builtin.shell: "{{ _dr_fsx_prepared.output_cmd }}"
+      ansible.builtin.shell: "{{ _dr_fsx_prepared.output_cmd }}"  # noqa: command-instead-of-shell
       register: _dr_fsx_outputs_raw
       changed_when: false
       when: not (_dr_fsx_prepared.skipped | default(false))
 
     # --- Store results ---
     - name: Store Production FSx result
-      set_fact:
+      ansible.builtin.set_fact:
         prod_fsx:
           file_system_id: "{{ (_prod_fsx_outputs_raw.stdout | from_json).file_system_id.value }}"
           file_system_dns_name: "{{ (_prod_fsx_outputs_raw.stdout | from_json).file_system_dns_name.value }}"
@@ -297,7 +310,7 @@
       when: not (_prod_fsx_prepared.skipped | default(false))
 
     - name: Store DR FSx result
-      set_fact:
+      ansible.builtin.set_fact:
         dr_fsx:
           file_system_id: "{{ (_dr_fsx_outputs_raw.stdout | from_json).file_system_id.value }}"
           file_system_dns_name: "{{ (_dr_fsx_outputs_raw.stdout | from_json).file_system_dns_name.value }}"
@@ -323,11 +336,11 @@
     _project_root: "{{ playbook_dir }}/.."
   tasks:
     - name: Skip values update if destroying
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: destroy_resources | default(false)
 
     - name: Set mgmtLIF and clusterLIF IPs from FSx outputs
-      set_fact:
+      ansible.builtin.set_fact:
         _hub_mgmt_lif: "{{ prod_fsx.svm_mgmt_ips | first }}"
         _hub_cluster_lif: "{{ prod_fsx.mgmt_ips | first }}"
         _secondary_mgmt_lif: "{{ dr_fsx.svm_mgmt_ips | first }}"
@@ -366,7 +379,7 @@
       changed_when: true
 
     - name: Display values file updates
-      debug:
+      ansible.builtin.debug:
         msg:
           - "=========================================="
           - "Values Files Updated"
@@ -400,11 +413,11 @@
   gather_facts: false
   tasks:
     - name: Skip summary if destroy was requested
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: destroy_resources | default(false)
 
     - name: Display complete DR infrastructure summary
-      debug:
+      ansible.builtin.debug:
         msg:
           - "============================================================"
           - "  NetApp DR Infrastructure - Setup Complete"
@@ -462,40 +475,40 @@
     _dr_fsx_name: "{{ dr_file_system_name | default(dr_cluster.cluster_name ~ '-' ~ dr_cluster.region ~ '-fsx') }}"
   tasks:
     - name: Skip if not destroying
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: not (destroy_resources | default(false))
 
     - name: Load FSx password from ~/.fsx file
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
       block:
         - name: Check if ~/.fsx file exists
-          stat:
+          ansible.builtin.stat:
             path: "{{ '~/.fsx' | expanduser }}"
           register: _fsx_file_stat
 
         - name: Read password from ~/.fsx file
-          slurp:
+          ansible.builtin.slurp:
             src: "{{ '~/.fsx' | expanduser }}"
           register: _fsx_file_content
           when: _fsx_file_stat.stat.exists | default(false)
 
         - name: Set password from ~/.fsx file
-          set_fact:
+          ansible.builtin.set_fact:
             fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
             svm_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
           when:
             - _fsx_file_stat.stat.exists | default(false)
             - _fsx_file_content.content is defined
             - fsx_admin_password is not defined or fsx_admin_password == ''
-      when: fsx_admin_password is not defined or fsx_admin_password == ''
 
-    - name: Read Production cluster management LIF
+    - name: Read Production cluster management LIF  # noqa: command-instead-of-shell
       ansible.builtin.shell: >-
         yq '.tridentFSX.clusterLIF // ""' {{ _project_root }}/values-hub.yaml
       register: _prod_lif_raw
       changed_when: false
       failed_when: false
 
-    - name: Read DR cluster management LIF
+    - name: Read DR cluster management LIF  # noqa: command-instead-of-shell
       ansible.builtin.shell: >-
         yq '.tridentFSX.clusterLIF // ""' {{ _project_root }}/values-secondary.yaml
       register: _dr_lif_raw
@@ -503,12 +516,12 @@
       failed_when: false
 
     - name: Set cluster LIF facts
-      set_fact:
+      ansible.builtin.set_fact:
         _prod_cluster_lif: "{{ _prod_lif_raw.stdout | default('') | trim }}"
         _dr_cluster_lif: "{{ _dr_lif_raw.stdout | default('') | trim }}"
 
     - name: Display peering teardown info
-      debug:
+      ansible.builtin.debug:
         msg:
           - "=========================================="
           - "Removing ONTAP Peering Before Destroy"
@@ -528,6 +541,7 @@
     # ------------------------------------------------------------------
     - name: Ensure FSx security group connectivity rules
       ansible.builtin.shell: |
+        set -o pipefail
         SG_NAME="{{ item.sg_name }}"
         REGION="{{ item.region }}"
 
@@ -570,15 +584,15 @@
       failed_when: false
 
     - name: Display SG rule restoration results
-      debug:
+      ansible.builtin.debug:
         msg: "{{ item.stdout_lines | default(['(skipped)']) }}"
       loop: "{{ _sg_ensure.results }}"
       loop_control:
         label: "{{ item.item.sg_name }}"
       when: item.stdout is defined
 
-    - name: Wait for restored security group rules to take effect
-      pause:
+    - name: Wait for restored security group rules to take effect  # noqa: no-handler
+      ansible.builtin.pause:
         seconds: 10
       when: _sg_ensure.changed | default(false)
 
@@ -745,6 +759,7 @@
 
     - name: Remove ONTAP peering from Production FSx (running in-cluster pod)
       ansible.builtin.shell: |
+        set -o pipefail
         B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
         echo ">>> Launching unpeer pod on Production cluster ({{ _prod_cluster_lif }})..."
         echo ">>> This may take 1-5 minutes if peers need to be removed."
@@ -764,12 +779,13 @@
       when: _prod_cluster_lif | default('') != ''
 
     - name: Display Production unpeer output
-      debug:
+      ansible.builtin.debug:
         var: _prod_unpeer.stdout_lines
       when: _prod_unpeer is not skipped
 
     - name: Remove ONTAP peering from DR FSx (running in-cluster pod)
       ansible.builtin.shell: |
+        set -o pipefail
         B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
         echo ">>> Launching unpeer pod on DR cluster ({{ _dr_cluster_lif }})..."
         echo ">>> This may take 1-5 minutes if peers need to be removed."
@@ -789,7 +805,7 @@
       when: _dr_cluster_lif | default('') != ''
 
     - name: Display DR unpeer output
-      debug:
+      ansible.builtin.debug:
         var: _dr_unpeer.stdout_lines
       when: _dr_unpeer is not skipped
 
@@ -799,7 +815,7 @@
         state: absent
 
     - name: Wait for peering removal to propagate
-      pause:
+      ansible.builtin.pause:
         seconds: 15
       when: (_prod_cluster_lif | default('') != '') or (_dr_cluster_lif | default('') != '')
 
@@ -809,76 +825,82 @@
   gather_facts: false
   tasks:
     - name: Skip if not destroying
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: not (destroy_resources | default(false))
 
     # --- Load FSx password (needed for terraform.tfvars) ---
     - name: Load FSx password from ~/.fsx file
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
       block:
         - name: Check if ~/.fsx file exists
-          stat:
+          ansible.builtin.stat:
             path: "{{ '~/.fsx' | expanduser }}"
           register: _fsx_file_stat
 
         - name: Read password from ~/.fsx file
-          slurp:
+          ansible.builtin.slurp:
             src: "{{ '~/.fsx' | expanduser }}"
           register: _fsx_file_content
           when: _fsx_file_stat.stat.exists | default(false)
 
         - name: Set password from ~/.fsx file
-          set_fact:
+          ansible.builtin.set_fact:
             fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
             svm_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
           when:
             - _fsx_file_stat.stat.exists | default(false)
             - _fsx_file_content.content is defined
             - fsx_admin_password is not defined or fsx_admin_password == ''
-      when: fsx_admin_password is not defined or fsx_admin_password == ''
 
     # --- Prepare Production FSx destroy (init, plan) ---
     - name: Prepare Production FSx destroy
-      include_role:
+      ansible.builtin.include_role:
         name: fsx_ontap_terraform
       vars:
-        cluster_info: "{{ prod_cluster }}"
-        fsx_label: "Production FSx"
-        file_system_name_override: "{{ prod_file_system_name | default('') }}"
-        terraform_state_region: "{{ prod_cluster.region }}"
-        svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
-        allowed_cidrs:
+        fsx_ontap_terraform_cluster_info: "{{ prod_cluster }}"
+        fsx_ontap_terraform_label: "Production FSx"
+        fsx_ontap_terraform_file_system_name_override: "{{ prod_file_system_name | default('') }}"
+        fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
+        fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
+        fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        fsx_ontap_terraform_svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_allowed_cidrs:
           - "{{ prod_cluster.vpc_cidr }}"
           - "{{ dr_cluster.vpc_cidr }}"
-        terraform_destroy: true
-        fsx_prepare_only: true
+        fsx_ontap_terraform_tags: "{{ resource_tags }}"
+        fsx_ontap_terraform_destroy: true
+        fsx_ontap_terraform_prepare_only: true
 
     - name: Save Production FSx destroy prepared state
-      set_fact:
-        _prod_fsx_prepared: "{{ fsx_prepared }}"
+      ansible.builtin.set_fact:
+        _prod_fsx_prepared: "{{ fsx_ontap_terraform_prepared }}"
 
     # --- Prepare DR FSx destroy (init, plan) ---
     - name: Prepare DR FSx destroy
-      include_role:
+      ansible.builtin.include_role:
         name: fsx_ontap_terraform
       vars:
-        cluster_info: "{{ dr_cluster }}"
-        fsx_label: "DR FSx"
-        file_system_name_override: "{{ dr_file_system_name | default('') }}"
-        terraform_state_region: "{{ prod_cluster.region }}"
-        svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
-        allowed_cidrs:
+        fsx_ontap_terraform_cluster_info: "{{ dr_cluster }}"
+        fsx_ontap_terraform_label: "DR FSx"
+        fsx_ontap_terraform_file_system_name_override: "{{ dr_file_system_name | default('') }}"
+        fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
+        fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
+        fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        fsx_ontap_terraform_svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_allowed_cidrs:
           - "{{ dr_cluster.vpc_cidr }}"
           - "{{ prod_cluster.vpc_cidr }}"
-        terraform_destroy: true
-        fsx_prepare_only: true
+        fsx_ontap_terraform_tags: "{{ resource_tags }}"
+        fsx_ontap_terraform_destroy: true
+        fsx_ontap_terraform_prepare_only: true
 
     - name: Save DR FSx destroy prepared state
-      set_fact:
-        _dr_fsx_prepared: "{{ fsx_prepared }}"
+      ansible.builtin.set_fact:
+        _dr_fsx_prepared: "{{ fsx_ontap_terraform_prepared }}"
 
     # --- Destroy both in parallel ---
     - name: Display parallel destroy notice
-      debug:
+      ansible.builtin.debug:
         msg:
           - "=========================================="
           - "Destroying FSx ONTAP in PARALLEL"
@@ -888,17 +910,19 @@
           - "=========================================="
 
     - name: Destroy FSx ONTAP - Production (async)
-      ansible.builtin.shell: "{{ _prod_fsx_prepared.apply_cmd }}"
+      ansible.builtin.shell: "{{ _prod_fsx_prepared.apply_cmd }}"  # noqa: command-instead-of-shell
       async: 3600
       poll: 0
       register: _prod_fsx_destroy_job
+      changed_when: true
       when: not (_prod_fsx_prepared.skipped | default(false))
 
     - name: Destroy FSx ONTAP - DR (async)
-      ansible.builtin.shell: "{{ _dr_fsx_prepared.apply_cmd }}"
+      ansible.builtin.shell: "{{ _dr_fsx_prepared.apply_cmd }}"  # noqa: command-instead-of-shell
       async: 3600
       poll: 0
       register: _dr_fsx_destroy_job
+      changed_when: true
       when: not (_dr_fsx_prepared.skipped | default(false))
 
     # --- Wait for both to complete ---
@@ -921,7 +945,7 @@
       when: not (_dr_fsx_prepared.skipped | default(false))
 
     - name: Display FSx destroy completion
-      debug:
+      ansible.builtin.debug:
         msg:
           - "=========================================="
           - "FSx ONTAP Filesystems Destroyed"
@@ -934,25 +958,28 @@
   gather_facts: false
   tasks:
     - name: Skip if not destroying
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: not (destroy_resources | default(false))
 
     - name: Destroy VPC peering via Terraform
-      include_role:
+      ansible.builtin.include_role:
         name: vpc_peering_terraform
       vars:
-        terraform_destroy: true
+        vpc_peering_terraform_state_bucket: "{{ terraform_state_bucket }}"
+        vpc_peering_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        vpc_peering_terraform_tags: "{{ resource_tags }}"
+        vpc_peering_terraform_destroy: true
 
 - name: Destruction Summary
   hosts: localhost
   gather_facts: false
   tasks:
     - name: Skip if not destroying
-      meta: end_play
+      ansible.builtin.meta: end_play
       when: not (destroy_resources | default(false))
 
     - name: Display destruction summary
-      debug:
+      ansible.builtin.debug:
         msg:
           - "============================================================"
           - "  NetApp DR Infrastructure - Destruction Complete"

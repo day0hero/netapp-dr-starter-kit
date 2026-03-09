@@ -2,51 +2,51 @@
 # Defaults for fsx_ontap_terraform role
 
 # Terraform source directory (where .tf files live)
-fsx_tf_source: "{{ playbook_dir }}/../terraform/fsx-ontap"
+fsx_ontap_terraform_tf_source: "{{ playbook_dir }}/../terraform/fsx-ontap"
 
 # Working directory base for terraform execution
-# The actual workdir will be: fsx_tf_workdir_base/<file_system_name>
-fsx_tf_workdir_base: "/tmp/netapp-dr-terraform"
+# The actual workdir will be: fsx_ontap_terraform_workdir_base/<file_system_name>
+fsx_ontap_terraform_workdir_base: "/tmp/netapp-dr-terraform"
 
 # Container configuration for running Terraform
-container_runtime: "podman"
-terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
+fsx_ontap_terraform_container_runtime: "podman"
+fsx_ontap_terraform_image: "quay.io/validatedpatterns/terraform:1.14.3"
 
 # Terraform state (S3 backend)
-terraform_state_bucket: ""
-terraform_state_region: ""  # Region where the S3 state bucket lives (must match actual bucket location)
-terraform_state_dynamodb_table: "terraform-state-lock"
+fsx_ontap_terraform_state_bucket: ""
+fsx_ontap_terraform_state_region: ""
+fsx_ontap_terraform_state_dynamodb_table: "terraform-state-lock"
 
 # Network Configuration (set by the playbook from cluster_discovery)
 # vpc_id: ""
 # subnet_ids: []
 # route_table_ids: []
-allowed_cidrs: []  # populated by playbook with local + peer VPC CIDRs
+fsx_ontap_terraform_allowed_cidrs: []
 
 # FSx ONTAP Configuration
-storage_capacity: 1024
-throughput_capacity: 1024
-storage_type: "SSD"
-deployment_type: "MULTI_AZ_1"
-weekly_maintenance_time: "7:01:00"
-automatic_backup_retention_days: 3
-daily_automatic_backup_start_time: "01:00"
+fsx_ontap_terraform_storage_capacity: 1024
+fsx_ontap_terraform_throughput_capacity: 1024
+fsx_ontap_terraform_storage_type: "SSD"
+fsx_ontap_terraform_deployment_type: "MULTI_AZ_1"
+fsx_ontap_terraform_weekly_maintenance_time: "7:01:00"
+fsx_ontap_terraform_automatic_backup_retention_days: 3
+fsx_ontap_terraform_daily_automatic_backup_start_time: "01:00"
 
 # SVM Configuration
-svm_name: "SVM1"
-root_volume_security_style: "UNIX"
+fsx_ontap_terraform_svm_name: "SVM1"
+fsx_ontap_terraform_root_volume_security_style: "UNIX"
 
 # Secrets Manager
-create_secrets: true
+fsx_ontap_terraform_create_secrets: true
 
 # Tags
-tags:
+fsx_ontap_terraform_tags:
   Environment: "production"
   ManagedBy: "Terraform"
 
 # Operation mode
-terraform_destroy: false
+fsx_ontap_terraform_destroy: false
 
-# Prepare-only mode: setup + init + plan, then export fsx_prepared fact
+# Prepare-only mode: setup + init + plan, then export fsx_ontap_terraform_prepared fact
 # for the caller to run apply in parallel. Skips apply/outputs.
-fsx_prepare_only: false
+fsx_ontap_terraform_prepare_only: false
