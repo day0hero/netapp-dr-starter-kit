@@ -14,7 +14,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install Ansible collections
+        run: |
+          pip install ansible-core
+          ansible-galaxy collection install -r ansible/ansible-requirements.yml --force
+
       - name: Lint Ansible Playbook
         uses: ansible/ansible-lint@8ba9595a4acd1b906eb75568b34f6ef592cd1528
-        with:
-          requirements_file: ansible/ansible-requirements.yml
