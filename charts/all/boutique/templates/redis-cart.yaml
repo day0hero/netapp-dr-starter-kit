@@ -50,6 +50,7 @@ spec:
       containers:
         - name: redis
           image: "{{ .Values.redis.image }}"
+          args: ["--save", ""]
           ports:
             - containerPort: 6379
           volumeMounts:
