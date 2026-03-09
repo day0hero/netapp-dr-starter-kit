@@ -20,6 +20,21 @@ wordpress:
 
   existingSecret: wordpress-password
 
+  updateStrategy:
+    type: Recreate
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
+  extraEnvVars:
+    - name: BITNAMI_DEBUG
+      value: "true"
+
   global:
     storageClass: storage-class-nfs
     security:
@@ -33,6 +48,13 @@ wordpress:
   mariadb:
     auth:
       existingSecret: wordpress-mariadb
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 768Mi
     image:
       registry: quay.io
       repository: validatedpatterns/mariadb
