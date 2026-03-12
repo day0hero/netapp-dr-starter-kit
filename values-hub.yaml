@@ -1,20 +1,5 @@
 # The build-dr make target will update the configuration in tridentFSX
 tridentFSX:
-<<<<<<< Updated upstream
-  mgmtLIF: 198.19.101.6
-  clusterLIF: "198.19.101.16"
-  svm: SVM1
-  interclusterIPs:
-    - 10.0.132.84
-    - 10.0.156.208
-  peer:
-    mgmtLIF: "198.19.222.237"
-    clusterLIF: "198.19.222.87"
-    svm: SVM1
-    interclusterIPs:
-      - 10.100.165.18
-      - 10.100.186.99
-=======
   mgmtLIF: 198.19.234.183
   clusterLIF: "198.19.234.240"
   svm: SVM1
@@ -28,7 +13,6 @@ tridentFSX:
     interclusterIPs:
       - 10.100.141.74
       - 10.100.146.198
->>>>>>> Stashed changes
 clusterGroup:
   name: hub
   argoCD:
