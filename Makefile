@@ -110,17 +110,17 @@ destroy-dr: ## Destroy DR infrastructure (FSx filesystems and VPC peering; prese
 		-e destroy_resources=true
 
 # Trident Protect AppVault S3 bucket from values-global.yaml
-_APPVAULT_BUCKET := $(shell yq '.global.tridentProtect.appVault.s3.bucketName // ""' values-global.yaml 2>/dev/null)
-_APPVAULT_REGION := $(shell yq '.global.tridentProtect.appVault.s3.region // ""' values-global.yaml 2>/dev/null)
+_APPVAULT_BUCKET := $(shell yq '.tridentProtect.appVault.s3.bucketName // ""' values-global.yaml 2>/dev/null)
+_APPVAULT_REGION := $(shell yq '.tridentProtect.appVault.s3.region // ""' values-global.yaml 2>/dev/null)
 
 .PHONY: create-appvault-bucket
 create-appvault-bucket: ## Create the S3 bucket for Trident Protect AppVault
 	@if [ -z "$(_APPVAULT_BUCKET)" ]; then \
-		echo "Error: Could not read .global.tridentProtect.appVault.s3.bucketName from values-global.yaml"; \
+		echo "Error: Could not read .tridentProtect.appVault.s3.bucketName from values-global.yaml"; \
 		exit 1; \
 	fi
 	@if [ -z "$(_APPVAULT_REGION)" ]; then \
-		echo "Error: Could not read .global.tridentProtect.appVault.s3.region from values-global.yaml"; \
+		echo "Error: Could not read .tridentProtect.appVault.s3.region from values-global.yaml"; \
 		exit 1; \
 	fi
 	@echo "=========================================="

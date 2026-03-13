@@ -1,8 +1,8 @@
-{{- if .Values.global.tridentProtect.appVault.enabled }}
+{{- if .Values.tridentProtect.appVault.enabled }}
 apiVersion: protect.trident.netapp.io/v1
 kind: AppVault
 metadata:
-  name: {{ .Values.global.tridentProtect.appVault.name }}
+  name: {{ .Values.tridentProtect.appVault.name }}
   namespace: trident-protect
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -10,8 +10,8 @@ spec:
   providerType: {{ .Values.tridentProtect.appVault.providerType | default "AWS" }}
   providerConfig:
     s3:
-      endpoint: s3.{{ .Values.global.tridentProtect.appVault.s3.region }}.{{ .Values.tridentProtect.appVault.s3.endpointURL }}
-      bucketName: {{ .Values.global.tridentProtect.appVault.s3.bucketName | quote }}
+      endpoint: s3.{{ .Values.tridentProtect.appVault.s3.region }}.{{ .Values.tridentProtect.appVault.s3.endpointURL }}
+      bucketName: {{ .Values.tridentProtect.appVault.s3.bucketName | quote }}
       {{- with .Values.tridentProtect.appVault.s3 }}
       {{- if hasKey . "secure" }}
       secure: {{ .secure | quote }}
