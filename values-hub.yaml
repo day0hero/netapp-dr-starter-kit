@@ -1,18 +1,18 @@
 # The build-dr make target will update the configuration in tridentFSX
 tridentFSX:
-  mgmtLIF: 198.19.234.183
-  clusterLIF: "198.19.234.240"
+  mgmtLIF: 198.19.99.244
+  clusterLIF: "198.19.99.27"
   svm: SVM1
   interclusterIPs:
-    - 10.0.138.189
-    - 10.0.144.172
+    - 10.0.129.152
+    - 10.0.154.113
   peer:
-    mgmtLIF: "198.19.229.36"
-    clusterLIF: "198.19.229.252"
+    mgmtLIF: "198.19.246.5"
+    clusterLIF: "198.19.246.120"
     svm: SVM1
     interclusterIPs:
-      - 10.100.141.74
-      - 10.100.146.198
+      - 10.100.138.241
+      - 10.100.156.128
 clusterGroup:
   name: hub
   argoCD:
@@ -143,8 +143,9 @@ clusterGroup:
     boutique:
       name: boutique
       namespace: boutique
+      chart: boutique
+      chartVersion: 0.0.*
       argoProject: workload
-      path: charts/all/boutique
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
