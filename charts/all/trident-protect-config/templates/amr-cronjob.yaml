@@ -27,8 +27,6 @@ data:
     set -uo pipefail
     TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
     API_URL="https://kubernetes.default.svc"
-    NS="trident-protect"
-    BASE="${API_URL}/apis/protect.trident.netapp.io/v1/namespaces/${NS}"
 
     api() {
       curl -sk -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" "$@"
@@ -45,8 +43,8 @@ data:
         APP_NS=$(echo "${LINE}" | jq -r '.sourceApplicationNamespace // .sourceApplicationName')
         echo "Processing AMR: ${AMR_NAME} (app: ${APP_NAME} in ns: ${APP_NS})"
 
-        APP_BASE="${API_URL}/apis/protect.trident.netapp.io/v1/namespaces/${APP_NS}"
-        APP_JSON=$(api "${APP_BASE}/applications/${APP_NAME}")
+        BASE="${API_URL}/apis/protect.trident.netapp.io/v1/namespaces/${APP_NS}"
+        APP_JSON=$(api "${BASE}/applications/${APP_NAME}")
         APP_UID=$(echo "${APP_JSON}" | jq -r '.metadata.uid // empty')
 
         if [ -z "${APP_UID}" ]; then
@@ -79,6 +77,7 @@ data:
 
           BODY=$(jq -n \
             --arg name "${AMR_NAME}" \
+            --arg ns "${APP_NS}" \
             --arg state "${DESIRED_STATE}" \
             --arg srcVault "${SRC_VAULT}" \
             --arg dstVault "${DST_VAULT}" \
@@ -90,7 +89,7 @@ data:
             '{
               apiVersion: "protect.trident.netapp.io/v1",
               kind: "AppMirrorRelationship",
-              metadata: { name: $name, namespace: "trident-protect" },
+              metadata: { name: $name, namespace: $ns },
               spec: {
                 desiredState: $state,
                 sourceAppVaultRef: $srcVault,
@@ -164,10 +163,9 @@ metadata:
     argocd.argoproj.io/sync-wave: "5"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: trident-protect-amr-reconcile
-  namespace: trident-protect
   annotations:
     argocd.argoproj.io/sync-wave: "5"
 rules:
@@ -179,10 +177,9 @@ rules:
     verbs: ["get", "list", "create", "patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: trident-protect-amr-reconcile
-  namespace: trident-protect
   annotations:
     argocd.argoproj.io/sync-wave: "5"
 subjects:
@@ -190,7 +187,7 @@ subjects:
     name: trident-protect-amr-reconcile
     namespace: trident-protect
 roleRef:
-  kind: Role
+  kind: ClusterRole
   name: trident-protect-amr-reconcile
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
