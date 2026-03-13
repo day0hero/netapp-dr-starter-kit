@@ -75,6 +75,11 @@ data:
           STORAGE_CLASS=$(echo "${LINE}" | jq -r '.storageClassName // empty')
           NS_MAPPING=$(echo "${LINE}" | jq -c '.namespaceMapping')
 
+          if [ "${NS_MAPPING}" = "[]" ] || [ "${NS_MAPPING}" = "null" ]; then
+            NS_MAPPING=$(echo "${APP_JSON}" | jq -c '[.spec.includedNamespaces[]? | {source: .namespace, destination: .namespace}]')
+            echo "  Auto-generated namespaceMapping: ${NS_MAPPING}"
+          fi
+
           BODY=$(jq -n \
             --arg name "${AMR_NAME}" \
             --arg ns "${APP_NS}" \
@@ -102,7 +107,12 @@ data:
             }
             | if $sc != "" then .spec.storageClassName = $sc else . end')
 
-          api -X POST "${BASE}/appmirrorrelationships" -d "${BODY}" | jq -r '.metadata.name // "create failed"'
+          RESPONSE=$(api -X POST "${BASE}/appmirrorrelationships" -d "${BODY}")
+          echo "${RESPONSE}" | jq -r '.metadata.name // empty'
+          ERROR=$(echo "${RESPONSE}" | jq -r '.message // empty')
+          if [ -n "${ERROR}" ]; then
+            echo "  API error: ${ERROR}"
+          fi
         fi
       done < <(grep -v '^\s*$' "${DEF_FILE}" | jq -c '.')
     done
