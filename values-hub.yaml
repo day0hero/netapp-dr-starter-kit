@@ -146,6 +146,9 @@ clusterGroup:
       chart: boutique
       chartVersion: 0.0.*
       argoProject: workload
+      overrides:
+        - name: global.storageClass
+          value: storage-class-nfs
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule
