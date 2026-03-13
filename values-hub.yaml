@@ -15,22 +15,21 @@ tridentProtect:
       minute: "0"
       snapshotRetention: "24"
       backupRetention: "7"
-
 # The build-dr make target will update the configuration in tridentFSX
 tridentFSX:
-  mgmtLIF: 198.19.52.125
-  clusterLIF: "198.19.52.148"
+  mgmtLIF: 198.19.66.1
+  clusterLIF: "198.19.66.31"
   svm: SVM1
   interclusterIPs:
-    - 10.0.137.138
-    - 10.0.144.112
+    - 10.0.128.126
+    - 10.0.156.173
   peer:
-    mgmtLIF: "198.19.84.177"
-    clusterLIF: "198.19.84.127"
+    mgmtLIF: "198.19.129.163"
+    clusterLIF: "198.19.129.96"
     svm: SVM1
     interclusterIPs:
-      - 10.100.133.11
-      - 10.100.150.160
+      - 10.100.147.62
+      - 10.100.172.123
 clusterGroup:
   name: hub
   argoCD:
@@ -61,33 +60,33 @@ clusterGroup:
             hs.message = "Awaiting TridentOrchestrator status."
           end
           return hs
-    # resourceActions requires clustergroup chart with resourceActions support
-    # Uncomment once the updated clustergroup chart is published
-    # resourceActions:
-    #   - group: protect.trident.netapp.io
-    #     kind: AppMirrorRelationship
-    #     action: |
-    #       discovery.lua: |
-    #         actions = {}
-    #         actions["Failover"] = {["disabled"] = true}
-    #         actions["Resync"] = {["disabled"] = true}
-    #         if obj.spec ~= nil and obj.spec.desiredState ~= nil then
-    #           if obj.spec.desiredState == "Established" then
-    #             actions["Failover"]["disabled"] = false
-    #           elseif obj.spec.desiredState == "Promoted" then
-    #             actions["Resync"]["disabled"] = false
-    #           end
-    #         end
-    #         return actions
-    #       definitions:
-    #       - name: Failover
-    #         action.lua: |
-    #           obj.spec.desiredState = "Promoted"
-    #           return obj
-    #       - name: Resync
-    #         action.lua: |
-    #           obj.spec.desiredState = "Established"
-    #           return obj
+        # resourceActions requires clustergroup chart with resourceActions support
+        # Uncomment once the updated clustergroup chart is published
+        # resourceActions:
+        #   - group: protect.trident.netapp.io
+        #     kind: AppMirrorRelationship
+        #     action: |
+        #       discovery.lua: |
+        #         actions = {}
+        #         actions["Failover"] = {["disabled"] = true}
+        #         actions["Resync"] = {["disabled"] = true}
+        #         if obj.spec ~= nil and obj.spec.desiredState ~= nil then
+        #           if obj.spec.desiredState == "Established" then
+        #             actions["Failover"]["disabled"] = false
+        #           elseif obj.spec.desiredState == "Promoted" then
+        #             actions["Resync"]["disabled"] = false
+        #           end
+        #         end
+        #         return actions
+        #       definitions:
+        #       - name: Failover
+        #         action.lua: |
+        #           obj.spec.desiredState = "Promoted"
+        #           return obj
+        #       - name: Resync
+        #         action.lua: |
+        #           obj.spec.desiredState = "Established"
+        #           return obj
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     open-cluster-management:
