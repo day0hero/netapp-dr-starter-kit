@@ -1,0 +1,19 @@
+{{- range .Values.tridentProtect.applications }}
+---
+apiVersion: protect.trident.netapp.io/v1
+kind: Application
+metadata:
+  name: {{ .name }}
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  includedNamespaces:
+    {{- range .namespaces }}
+    - namespace: {{ .name }}
+      {{- if .labelSelector }}
+      labelSelector:
+        {{- toYaml .labelSelector | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}

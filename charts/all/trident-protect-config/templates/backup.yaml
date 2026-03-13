@@ -1,0 +1,22 @@
+{{- range .Values.tridentProtect.backups }}
+---
+apiVersion: protect.trident.netapp.io/v1
+kind: Backup
+metadata:
+  name: {{ .name }}
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  applicationRef: {{ .applicationRef }}
+  appVaultRef: {{ .appVaultRef }}
+  {{- if .dataMover }}
+  dataMover: {{ .dataMover }}
+  {{- end }}
+  {{- if .reclaimPolicy }}
+  reclaimPolicy: {{ .reclaimPolicy }}
+  {{- end }}
+  {{- if .snapshotRef }}
+  snapshotRef: {{ .snapshotRef }}
+  {{- end }}
+{{- end }}
