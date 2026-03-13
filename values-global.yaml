@@ -22,34 +22,6 @@ tridentProtect:
       namespaces:
         - name: wordpress
 
-  appMirrorRelationships:
-    - name: boutique-mirror
-      sourceAppVaultRef: s3-appvault
-      destinationAppVaultRef: s3-appvault
-      sourceApplicationName: boutique
-      recurrenceRule: "DTSTART:20240101T000000Z\nRRULE:FREQ=HOURLY;INTERVAL=1"
-    - name: wordpress-mirror
-      sourceAppVaultRef: s3-appvault
-      destinationAppVaultRef: s3-appvault
-      sourceApplicationName: wordpress
-      recurrenceRule: "DTSTART:20240101T000000Z\nRRULE:FREQ=HOURLY;INTERVAL=1"
-
-  schedules:
-    - name: boutique-hourly
-      applicationRef: boutique
-      appVaultRef: s3-appvault
-      granularity: Hourly
-      minute: "0"
-      snapshotRetention: "24"
-      backupRetention: "7"
-    - name: wordpress-hourly
-      applicationRef: wordpress
-      appVaultRef: s3-appvault
-      granularity: Hourly
-      minute: "0"
-      snapshotRetention: "24"
-      backupRetention: "7"
-
 main:
   clusterGroupName: hub
   multiSourceConfig:

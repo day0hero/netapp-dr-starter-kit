@@ -1,3 +1,21 @@
+# Schedules are source-cluster only (hub creates snapshots for replication)
+tridentProtect:
+  schedules:
+    - name: boutique-hourly
+      applicationRef: boutique
+      appVaultRef: s3-appvault
+      granularity: Hourly
+      minute: "0"
+      snapshotRetention: "24"
+      backupRetention: "7"
+    - name: wordpress-hourly
+      applicationRef: wordpress
+      appVaultRef: s3-appvault
+      granularity: Hourly
+      minute: "0"
+      snapshotRetention: "24"
+      backupRetention: "7"
+
 # The build-dr make target will update the configuration in tridentFSX
 tridentFSX:
   mgmtLIF: 198.19.52.125
