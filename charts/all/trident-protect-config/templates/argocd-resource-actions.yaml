@@ -26,7 +26,14 @@ data:
     NS="{{ $gitopsNS }}"
     CM="{{ $cmName }}"
 
-    EXISTING=$(api "${API}/api/v1/namespaces/${NS}/configmaps/${CM}" | jq -r ".data[\"${PATCH_KEY}\"] // empty")
+    CM_JSON=$(api "${API}/api/v1/namespaces/${NS}/configmaps/${CM}")
+    CM_ERR=$(echo "${CM_JSON}" | jq -r '.message // empty')
+    if [ -n "${CM_ERR}" ]; then
+      echo "Failed to get ${CM} in ${NS}: ${CM_ERR}"
+      exit 1
+    fi
+
+    EXISTING=$(echo "${CM_JSON}" | jq -r ".data[\"${PATCH_KEY}\"] // empty")
     if [ -n "${EXISTING}" ]; then
       echo "Resource actions already configured in ${CM} — nothing to do"
       exit 0
@@ -64,7 +71,12 @@ data:
       -H "Content-Type: application/strategic-merge-patch+json" \
       -d "${BODY}")
 
-    echo "${RESULT}" | jq -r '.metadata.name // "patch failed"'
+    PATCH_ERR=$(echo "${RESULT}" | jq -r '.message // empty')
+    if [ -n "${PATCH_ERR}" ]; then
+      echo "Patch failed: ${PATCH_ERR}"
+      exit 1
+    fi
+    echo "${RESULT}" | jq -r '.metadata.name'
     echo "=== Done ==="
 ---
 apiVersion: batch/v1
