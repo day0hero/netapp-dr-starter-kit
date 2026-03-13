@@ -4,7 +4,7 @@ apiVersion: protect.trident.netapp.io/v1
 kind: Application
 metadata:
   name: {{ .name }}
-  namespace: trident-protect
+  namespace: {{ (index .namespaces 0).name }}
   annotations:
     argocd.argoproj.io/sync-wave: "4"
 spec:

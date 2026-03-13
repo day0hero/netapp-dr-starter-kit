@@ -16,6 +16,7 @@ data:
       "sourceAppVaultRef": {{ .sourceAppVaultRef | quote }},
       "destinationAppVaultRef": {{ .destinationAppVaultRef | quote }},
       "sourceApplicationName": {{ .sourceApplicationName | quote }},
+      "sourceApplicationNamespace": {{ .sourceApplicationNamespace | default .sourceApplicationName | quote }},
       "recurrenceRule": {{ .recurrenceRule | default "DTSTART:20240101T000000Z\\nRRULE:FREQ=HOURLY;INTERVAL=1" | quote }},
       "storageClassName": {{ .storageClassName | default "" | quote }},
       "namespaceMapping": {{ .namespaceMapping | default list | toJson }}
@@ -41,9 +42,11 @@ data:
 
         AMR_NAME=$(echo "${LINE}" | jq -r '.name')
         APP_NAME=$(echo "${LINE}" | jq -r '.sourceApplicationName')
-        echo "Processing AMR: ${AMR_NAME} (app: ${APP_NAME})"
+        APP_NS=$(echo "${LINE}" | jq -r '.sourceApplicationNamespace // .sourceApplicationName')
+        echo "Processing AMR: ${AMR_NAME} (app: ${APP_NAME} in ns: ${APP_NS})"
 
-        APP_JSON=$(api "${BASE}/applications/${APP_NAME}")
+        APP_BASE="${API_URL}/apis/protect.trident.netapp.io/v1/namespaces/${APP_NS}"
+        APP_JSON=$(api "${APP_BASE}/applications/${APP_NAME}")
         APP_UID=$(echo "${APP_JSON}" | jq -r '.metadata.uid // empty')
 
         if [ -z "${APP_UID}" ]; then
