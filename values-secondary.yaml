@@ -87,6 +87,8 @@ clusterGroup:
     golang-external-secrets:
     trident:
     trident-protect:
+    boutique:
+    wordpress:
   # The only subscription on spokes is gitops which gets managed by ACM
   subscriptions:
     trident:
