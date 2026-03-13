@@ -1,0 +1,137 @@
+{{- if .Values.tridentProtect.appMirrorRelationships }}
+{{- if gt (len .Values.tridentProtect.appMirrorRelationships) 0 }}
+{{- $gitopsNS := printf "%s-%s" .Values.global.pattern .Values.clusterGroup.name }}
+{{- $argoCDName := printf "%s-gitops" .Values.clusterGroup.name }}
+{{- $cmName := printf "%s-cm" $argoCDName }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-amr-actions-script
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+data:
+  patch-argocd-cm.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+    API="https://kubernetes.default.svc"
+
+    api() {
+      curl -sk -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" "$@"
+    }
+
+    PATCH_KEY="resource.customizations.actions.protect.trident.netapp.io_AppMirrorRelationship"
+    NS="{{ $gitopsNS }}"
+    CM="{{ $cmName }}"
+
+    EXISTING=$(api "${API}/api/v1/namespaces/${NS}/configmaps/${CM}" | jq -r ".data[\"${PATCH_KEY}\"] // empty")
+    if [ -n "${EXISTING}" ]; then
+      echo "Resource actions already configured in ${CM} — nothing to do"
+      exit 0
+    fi
+
+    read -r -d '' ACTION_YAML << 'LUAEOF' || true
+    discovery.lua: |
+      actions = {}
+      actions["Failover"] = {["disabled"] = true}
+      actions["Resync"] = {["disabled"] = true}
+      if obj.spec ~= nil and obj.spec.desiredState ~= nil then
+        if obj.spec.desiredState == "Established" then
+          actions["Failover"]["disabled"] = false
+        elseif obj.spec.desiredState == "Promoted" then
+          actions["Resync"]["disabled"] = false
+        end
+      end
+      return actions
+    definitions:
+    - name: Failover
+      action.lua: |
+        obj.spec.desiredState = "Promoted"
+        return obj
+    - name: Resync
+      action.lua: |
+        obj.spec.desiredState = "Established"
+        return obj
+    LUAEOF
+
+    BODY=$(jq -n --arg key "${PATCH_KEY}" --arg val "${ACTION_YAML}" \
+      '{"data": {($key): $val}}')
+
+    echo "Patching ${CM} in ${NS} with AMR resource actions..."
+    RESULT=$(api -X PATCH "${API}/api/v1/namespaces/${NS}/configmaps/${CM}" \
+      -H "Content-Type: application/strategic-merge-patch+json" \
+      -d "${BODY}")
+
+    echo "${RESULT}" | jq -r '.metadata.name // "patch failed"'
+    echo "=== Done ==="
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: argocd-amr-actions
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: argocd-amr-actions
+      containers:
+        - name: patch-argocd
+          image: {{ .Values.tridentProtect.amrReconcile.image | default "image-registry.openshift-image-registry.svc:5000/openshift/tools" }}
+          command: ["/bin/bash", "/scripts/patch-argocd-cm.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: argocd-amr-actions-script
+            items:
+              - key: patch-argocd-cm.sh
+                path: patch-argocd-cm.sh
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argocd-amr-actions
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-amr-actions-cm-patch
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ $cmName }}"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-amr-actions-cm-patch
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+subjects:
+  - kind: ServiceAccount
+    name: argocd-amr-actions
+    namespace: trident-protect
+roleRef:
+  kind: ClusterRole
+  name: argocd-amr-actions-cm-patch
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
