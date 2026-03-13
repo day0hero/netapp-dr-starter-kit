@@ -42,31 +42,33 @@ clusterGroup:
             hs.message = "Awaiting TridentOrchestrator status."
           end
           return hs
-    resourceActions:
-      - group: protect.trident.netapp.io
-        kind: AppMirrorRelationship
-        action: |
-          discovery.lua: |
-            actions = {}
-            actions["Failover"] = {["disabled"] = true}
-            actions["Resync"] = {["disabled"] = true}
-            if obj.spec ~= nil and obj.spec.desiredState ~= nil then
-              if obj.spec.desiredState == "Established" then
-                actions["Failover"]["disabled"] = false
-              elseif obj.spec.desiredState == "Promoted" then
-                actions["Resync"]["disabled"] = false
-              end
-            end
-            return actions
-          definitions:
-          - name: Failover
-            action.lua: |
-              obj.spec.desiredState = "Promoted"
-              return obj
-          - name: Resync
-            action.lua: |
-              obj.spec.desiredState = "Established"
-              return obj
+    # resourceActions requires clustergroup chart with resourceActions support
+    # Uncomment once the updated clustergroup chart is published
+    # resourceActions:
+    #   - group: protect.trident.netapp.io
+    #     kind: AppMirrorRelationship
+    #     action: |
+    #       discovery.lua: |
+    #         actions = {}
+    #         actions["Failover"] = {["disabled"] = true}
+    #         actions["Resync"] = {["disabled"] = true}
+    #         if obj.spec ~= nil and obj.spec.desiredState ~= nil then
+    #           if obj.spec.desiredState == "Established" then
+    #             actions["Failover"]["disabled"] = false
+    #           elseif obj.spec.desiredState == "Promoted" then
+    #             actions["Resync"]["disabled"] = false
+    #           end
+    #         end
+    #         return actions
+    #       definitions:
+    #       - name: Failover
+    #         action.lua: |
+    #           obj.spec.desiredState = "Promoted"
+    #           return obj
+    #       - name: Resync
+    #         action.lua: |
+    #           obj.spec.desiredState = "Established"
+    #           return obj
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     golang-external-secrets:
