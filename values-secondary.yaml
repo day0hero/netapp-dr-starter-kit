@@ -12,19 +12,19 @@ tridentProtect:
       sourceApplicationName: wordpress
       recurrenceRule: "DTSTART:20240101T000000Z\nRRULE:FREQ=HOURLY;INTERVAL=1"
 tridentFSX:
-  mgmtLIF: 198.19.129.163
-  clusterLIF: "198.19.129.96"
+  mgmtLIF: 198.19.81.66
+  clusterLIF: "198.19.81.27"
   svm: SVM1
   interclusterIPs:
-    - 10.100.147.62
-    - 10.100.172.123
+    - 10.100.158.207
+    - 10.100.160.94
   peer:
-    mgmtLIF: "198.19.66.1"
-    clusterLIF: "198.19.66.31"
+    mgmtLIF: "198.19.196.148"
+    clusterLIF: "198.19.196.121"
     svm: SVM1
     interclusterIPs:
-      - 10.0.128.126
-      - 10.0.156.173
+      - 10.0.128.191
+      - 10.0.154.177
 clusterGroup:
   name: secondary
   argoCD:
