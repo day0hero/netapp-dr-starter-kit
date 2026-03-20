@@ -46,21 +46,43 @@ data:
       ERRORS=$((ERRORS + 1))
     else
       echo "  Application UID: ${APP_UID}"
-      CURRENT_UID=$(api "${BASE}/appmirrorrelationships/${AMR_NAME}" | jq -r '.spec.sourceApplicationUID // empty')
-      if [ "${CURRENT_UID}" = "${APP_UID}" ]; then
-        echo "  UID already correct — no patch needed"
-      else
-        echo "  Patching sourceApplicationUID..."
+      AMR_JSON=$(api "${BASE}/appmirrorrelationships/${AMR_NAME}")
+      CURRENT_UID=$(echo "${AMR_JSON}" | jq -r '.spec.sourceApplicationUID // empty')
+      CURRENT_NSMAP=$(echo "${AMR_JSON}" | jq -c '.spec.namespaceMapping // []')
+
+      PATCH='{}'
+      NEEDS_PATCH=false
+
+      if [ "${CURRENT_UID}" != "${APP_UID}" ]; then
+        echo "  sourceApplicationUID: ${CURRENT_UID:-<empty>} → ${APP_UID}"
+        PATCH=$(echo "${PATCH}" | jq --arg uid "${APP_UID}" '.spec.sourceApplicationUID = $uid')
+        NEEDS_PATCH=true
+      fi
+
+      if [ "${CURRENT_NSMAP}" = "[]" ] || [ "${CURRENT_NSMAP}" = "null" ]; then
+        APP_JSON=$(api "${BASE}/applications/${APP_NAME}")
+        NS_MAP=$(echo "${APP_JSON}" | jq -c '[.spec.includedNamespaces[]? | {source: .namespace, destination: .namespace}]')
+        if [ "${NS_MAP}" != "[]" ] && [ "${NS_MAP}" != "null" ]; then
+          echo "  namespaceMapping: populating from Application includedNamespaces"
+          PATCH=$(echo "${PATCH}" | jq --argjson nsmap "${NS_MAP}" '.spec.namespaceMapping = $nsmap')
+          NEEDS_PATCH=true
+        fi
+      fi
+
+      if [ "${NEEDS_PATCH}" = "true" ]; then
+        echo "  Patching AMR..."
         RESULT=$(api -X PATCH "${BASE}/appmirrorrelationships/${AMR_NAME}" \
           -H "Content-Type: application/merge-patch+json" \
-          -d "{\"spec\":{\"sourceApplicationUID\":\"${APP_UID}\"}}")
-        PATCHED=$(echo "${RESULT}" | jq -r '.spec.sourceApplicationUID // empty')
-        if [ "${PATCHED}" = "${APP_UID}" ]; then
-          echo "  Patched successfully"
+          -d "${PATCH}")
+        PATCHED_UID=$(echo "${RESULT}" | jq -r '.spec.sourceApplicationUID // empty')
+        if [ -n "${PATCHED_UID}" ]; then
+          echo "  Patched successfully (UID: ${PATCHED_UID})"
         else
           echo "  Patch may have failed: $(echo "${RESULT}" | jq -r '.message // "unknown error"')"
           ERRORS=$((ERRORS + 1))
         fi
+      else
+        echo "  No patch needed"
       fi
     fi
     {{- end }}

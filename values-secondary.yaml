@@ -6,11 +6,17 @@ tridentProtect:
       destinationAppVaultRef: s3-appvault
       sourceApplicationName: boutique
       recurrenceRule: "DTSTART:20240101T000000Z\nRRULE:FREQ=HOURLY;INTERVAL=1"
+      namespaceMapping:
+        - source: boutique
+          destination: boutique
     - name: wordpress-mirror
       sourceAppVaultRef: s3-appvault
       destinationAppVaultRef: s3-appvault
       sourceApplicationName: wordpress
       recurrenceRule: "DTSTART:20240101T000000Z\nRRULE:FREQ=HOURLY;INTERVAL=1"
+      namespaceMapping:
+        - source: wordpress
+          destination: wordpress
 tridentFSX:
   mgmtLIF: 198.19.192.228
   clusterLIF: "198.19.192.54"
