@@ -10,85 +10,147 @@ metadata:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 data:
-  patch-uids.sh: |
-    #!/bin/bash
-    set -uo pipefail
-    TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-    API="https://kubernetes.default.svc"
+  patch-uids.py: |
+    #!/usr/bin/env python3
+    """Read hub Application UIDs from S3 and patch AMRs on the secondary."""
+    import json, os, sys, datetime, hashlib, hmac, ssl
+    import urllib.request, urllib.error
 
-    api() {
-      curl -sk -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" "$@"
-    }
+    TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    API = "https://kubernetes.default.svc"
+    BUCKET = os.environ["S3_BUCKET"]
+    REGION = os.environ["S3_REGION"]
+    ACCESS_KEY = os.environ["AWS_ACCESS_KEY_ID"]
+    SECRET_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+    S3_KEY = "dr-metadata/application-uids.json"
+    AMR_DEFINITIONS = json.loads(os.environ.get("AMR_DEFINITIONS", "[]"))
 
-    ERRORS=0
-    {{- range .Values.tridentProtect.appMirrorRelationships }}
+    CTX = ssl.create_default_context()
+    CTX.check_hostname = False
+    CTX.verify_mode = ssl.CERT_NONE
 
-    APP_NAME="{{ .sourceApplicationName }}"
-    APP_NS="{{ .sourceApplicationNamespace | default .sourceApplicationName }}"
-    AMR_NAME="{{ .name }}"
-    BASE="${API}/apis/protect.trident.netapp.io/v1/namespaces/${APP_NS}"
+    def sign(key, msg):
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
 
-    echo "--- ${AMR_NAME}: looking up ${APP_NAME} UID in ${APP_NS} ---"
+    def s3_get():
+        host = f"{BUCKET}.s3.{REGION}.amazonaws.com"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        datestamp = now.strftime("%Y%m%d")
+        amzdate = now.strftime("%Y%m%dT%H%M%SZ")
+        payload_hash = hashlib.sha256(b"").hexdigest()
 
-    RETRIES=0
-    APP_UID=""
-    while [ -z "${APP_UID}" ] && [ ${RETRIES} -lt 20 ]; do
-      APP_UID=$(api "${BASE}/applications/${APP_NAME}" | jq -r '.metadata.uid // empty')
-      if [ -z "${APP_UID}" ]; then
-        echo "  Application not ready yet, retrying (${RETRIES}/20)..."
-        sleep 5
-        RETRIES=$((RETRIES + 1))
-      fi
-    done
+        canonical = "\n".join([
+            "GET", f"/{S3_KEY}", "",
+            f"host:{host}", f"x-amz-content-sha256:{payload_hash}",
+            f"x-amz-date:{amzdate}", "",
+            "host;x-amz-content-sha256;x-amz-date", payload_hash,
+        ])
+        scope = f"{datestamp}/{REGION}/s3/aws4_request"
+        string_to_sign = "\n".join([
+            "AWS4-HMAC-SHA256", amzdate, scope,
+            hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        ])
+        k = sign(sign(sign(sign(
+            f"AWS4{SECRET_KEY}".encode("utf-8"), datestamp),
+            REGION), "s3"), "aws4_request")
+        sig = hmac.new(k, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+        auth = (f"AWS4-HMAC-SHA256 Credential={ACCESS_KEY}/{scope},"
+                f"SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
+                f"Signature={sig}")
 
-    if [ -z "${APP_UID}" ]; then
-      echo "  ERROR: Application '${APP_NAME}' UID not available after retries"
-      ERRORS=$((ERRORS + 1))
-    else
-      echo "  Application UID: ${APP_UID}"
-      AMR_JSON=$(api "${BASE}/appmirrorrelationships/${AMR_NAME}")
-      CURRENT_UID=$(echo "${AMR_JSON}" | jq -r '.spec.sourceApplicationUID // empty')
-      CURRENT_NSMAP=$(echo "${AMR_JSON}" | jq -c '.spec.namespaceMapping // []')
+        req = urllib.request.Request(
+            f"https://{host}/{S3_KEY}",
+            headers={
+                "Host": host, "x-amz-date": amzdate,
+                "x-amz-content-sha256": payload_hash,
+                "Authorization": auth,
+            },
+        )
+        return json.loads(urllib.request.urlopen(req).read())
 
-      PATCH='{}'
-      NEEDS_PATCH=false
+    def kube_api(method, path, data=None):
+        token = open(TOKEN_PATH).read().strip()
+        headers = {"Authorization": f"Bearer {token}"}
+        body = None
+        if data is not None:
+            body = json.dumps(data).encode("utf-8")
+            headers["Content-Type"] = "application/merge-patch+json"
+        req = urllib.request.Request(
+            f"{API}{path}", data=body, method=method, headers=headers,
+        )
+        try:
+            return json.loads(urllib.request.urlopen(req, context=CTX).read())
+        except urllib.error.HTTPError as e:
+            err = e.read().decode()
+            print(f"  API error {e.code}: {err}", file=sys.stderr)
+            return {"error": err, "code": e.code}
 
-      if [ "${CURRENT_UID}" != "${APP_UID}" ]; then
-        echo "  sourceApplicationUID: ${CURRENT_UID:-<empty>} → ${APP_UID}"
-        PATCH=$(echo "${PATCH}" | jq --arg uid "${APP_UID}" '.spec.sourceApplicationUID = $uid')
-        NEEDS_PATCH=true
-      fi
+    # Read hub UIDs from S3
+    print("=== Reading hub Application UIDs from S3 ===")
+    try:
+        manifest = s3_get()
+        hub_uids = manifest.get("applicationUIDs", {})
+        print(f"  Found {len(hub_uids)} application UID(s)")
+        for name, info in hub_uids.items():
+            print(f"    {name}: {info['uid']}")
+    except Exception as e:
+        print(f"  ERROR: Could not read UIDs from S3: {e}")
+        print("  Make sure the hub PostSync hook has run at least once.")
+        sys.exit(1)
 
-      if [ "${CURRENT_NSMAP}" = "[]" ] || [ "${CURRENT_NSMAP}" = "null" ]; then
-        APP_JSON=$(api "${BASE}/applications/${APP_NAME}")
-        NS_MAP=$(echo "${APP_JSON}" | jq -c '[.spec.includedNamespaces[]? | {source: .namespace, destination: .namespace}]')
-        if [ "${NS_MAP}" != "[]" ] && [ "${NS_MAP}" != "null" ]; then
-          echo "  namespaceMapping: populating from Application includedNamespaces"
-          PATCH=$(echo "${PATCH}" | jq --argjson nsmap "${NS_MAP}" '.spec.namespaceMapping = $nsmap')
-          NEEDS_PATCH=true
-        fi
-      fi
+    # Patch each AMR
+    errors = 0
+    for amr in AMR_DEFINITIONS:
+        amr_name = amr["name"]
+        app_name = amr["sourceApplicationName"]
+        app_ns = amr.get("sourceApplicationNamespace", app_name)
+        base = f"/apis/protect.trident.netapp.io/v1/namespaces/{app_ns}"
 
-      if [ "${NEEDS_PATCH}" = "true" ]; then
-        echo "  Patching AMR..."
-        RESULT=$(api -X PATCH "${BASE}/appmirrorrelationships/${AMR_NAME}" \
-          -H "Content-Type: application/merge-patch+json" \
-          -d "${PATCH}")
-        PATCHED_UID=$(echo "${RESULT}" | jq -r '.spec.sourceApplicationUID // empty')
-        if [ -n "${PATCHED_UID}" ]; then
-          echo "  Patched successfully (UID: ${PATCHED_UID})"
-        else
-          echo "  Patch may have failed: $(echo "${RESULT}" | jq -r '.message // "unknown error"')"
-          ERRORS=$((ERRORS + 1))
-        fi
-      else
-        echo "  No patch needed"
-      fi
-    fi
-    {{- end }}
+        print(f"\n--- {amr_name} ---")
 
-    echo "=== AMR UID patch complete (errors: ${ERRORS}) ==="
-    exit ${ERRORS}
+        if app_name not in hub_uids:
+            print(f"  ERROR: No hub UID for application '{app_name}'")
+            errors += 1
+            continue
+
+        hub_uid = hub_uids[app_name]["uid"]
+        amr_data = kube_api("GET", f"{base}/appmirrorrelationships/{amr_name}")
+        if "error" in amr_data:
+            print(f"  AMR not found yet, skipping")
+            errors += 1
+            continue
+
+        current_uid = amr_data.get("spec", {}).get("sourceApplicationUID", "")
+        current_nsmap = amr_data.get("spec", {}).get("namespaceMapping") or []
+
+        patch = {}
+        if current_uid != hub_uid:
+            print(f"  sourceApplicationUID: {current_uid or '<empty>'} -> {hub_uid}")
+            patch["sourceApplicationUID"] = hub_uid
+
+        if not current_nsmap:
+            app_data = kube_api("GET", f"{base}/applications/{app_name}")
+            if "error" not in app_data:
+                ns_list = app_data.get("spec", {}).get("includedNamespaces", [])
+                nsmap = [{"source": n["namespace"], "destination": n["namespace"]}
+                         for n in ns_list if "namespace" in n]
+                if nsmap:
+                    print(f"  namespaceMapping: populating from Application")
+                    patch["namespaceMapping"] = nsmap
+
+        if patch:
+            result = kube_api("PATCH", f"{base}/appmirrorrelationships/{amr_name}",
+                              {"spec": patch})
+            if "error" not in result:
+                print(f"  Patched successfully")
+            else:
+                print(f"  Patch failed")
+                errors += 1
+        else:
+            print(f"  No patch needed")
+
+    print(f"\n=== AMR UID patch complete (errors: {errors}) ===")
+    sys.exit(1 if errors else 0)
 ---
 apiVersion: batch/v1
 kind: Job
@@ -108,7 +170,24 @@ spec:
       containers:
         - name: patch-uids
           image: {{ .Values.tridentProtect.amrPostSync.image | default "image-registry.openshift-image-registry.svc:5000/openshift/tools" }}
-          command: ["/bin/bash", "/scripts/patch-uids.sh"]
+          command: ["python3", "/scripts/patch-uids.py"]
+          env:
+            - name: AMR_DEFINITIONS
+              value: {{ .Values.tridentProtect.appMirrorRelationships | toJson | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.tridentProtect.appVault.s3.bucketName | quote }}
+            - name: S3_REGION
+              value: {{ .Values.tridentProtect.appVault.s3.region | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tridentProtect.appVault.credentials.secretName }}
+                  key: accessKeyID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tridentProtect.appVault.credentials.secretName }}
+                  key: secretAccessKey
           volumeMounts:
             - name: scripts
               mountPath: /scripts
@@ -118,7 +197,7 @@ spec:
           configMap:
             name: amr-uid-patch-script
             items:
-              - key: patch-uids.sh
-                path: patch-uids.sh
+              - key: patch-uids.py
+                path: patch-uids.py
 {{- end }}
 {{- end }}
