@@ -53,7 +53,7 @@ jobs:
             # disable shellcheck of single quotes in yq
             # shellcheck disable=2016
             yq eval-all '. as $item ireduce ({}; . * $item )' values-global.yaml "$i" > tmp.yaml
-            check-jsonschema --fill-defaults --schemafile https://raw.githubusercontent.com/validatedpatterns/clustergroup-chart/refs/heads/main/values.schema.json tmp.yaml
+            check-jsonschema --fill-defaults --schemafile https://raw.githubusercontent.com/day0hero/clustergroup-chart/refs/heads/resource_actions/values.schema.json tmp.yaml
             rm -f tmp.yaml
           done
 
