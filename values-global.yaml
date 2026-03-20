@@ -26,4 +26,6 @@ main:
   clusterGroupName: hub
   multiSourceConfig:
     enabled: true
-    clusterGroupChartVersion: "0.9.*"
+    clusterGroupGitRepoUrl: https://github.com/day0hero/clustergroup-chart
+    clusterGroupChartGitRevision: resource_actions
+    #clusterGroupChartVersion: "0.9.*"
