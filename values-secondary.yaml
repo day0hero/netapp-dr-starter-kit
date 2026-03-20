@@ -145,6 +145,14 @@ clusterGroup:
           kind: AppMirrorRelationship
           jqPathExpressions:
             - .spec.sourceApplicationUID
+    dr-monitoring:
+      name: dr-monitoring
+      namespace: openshift-monitoring
+      argoProject: trident
+      path: charts/all/dr-monitoring
+      overrides:
+        - name: drMonitoring.clusterRole
+          value: secondary
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule

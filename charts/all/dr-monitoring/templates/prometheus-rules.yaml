@@ -1,0 +1,171 @@
+{{- if .Values.drMonitoring.alerts.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: trident-protect-dr-alerts
+  namespace: openshift-monitoring
+  labels:
+    app.kubernetes.io/name: dr-monitoring
+    app.kubernetes.io/component: alerts
+    prometheus: k8s
+    role: alert-rules
+spec:
+  groups:
+    # ── AMR Health ──
+    - name: trident-protect.amr
+      rules:
+        - alert: AMRNotEstablished
+          annotations:
+            summary: >-
+              AMR {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} has not reached Established state
+            description: >-
+              AppMirrorRelationship {{`{{ $labels.name }}`}} in namespace {{`{{ $labels.namespace }}`}}
+              has been in a non-Established state for more than {{ .Values.drMonitoring.alerts.amrEstablishingThreshold }}.
+              Current state: {{`{{ $labels.current_state_value }}`}}.
+          expr: |
+            trident_amr_current_state{current_state_value="Established"} == 0
+            and
+            trident_amr_desired_state{desired_state_value="Established"} == 1
+          for: {{ .Values.drMonitoring.alerts.amrEstablishingThreshold }}
+          labels:
+            severity: warning
+            component: trident-protect
+
+        - alert: AMRFailed
+          annotations:
+            summary: >-
+              AMR {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} is in Failed state
+            description: >-
+              AppMirrorRelationship {{`{{ $labels.name }}`}} in namespace {{`{{ $labels.namespace }}`}}
+              has entered Failed state. Immediate attention required.
+          expr: |
+            trident_amr_current_state{current_state_value="Failed"} == 1
+          for: 5m
+          labels:
+            severity: critical
+            component: trident-protect
+
+        - alert: AMRDesiredStateMismatch
+          annotations:
+            summary: >-
+              AMR {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} desired/actual state mismatch
+            description: >-
+              AppMirrorRelationship {{`{{ $labels.name }}`}} desired state does not match actual state
+              for over 1 hour. The relationship may be stuck.
+          expr: |
+            (
+              trident_amr_desired_state{desired_state_value="Established"} == 1
+              unless
+              trident_amr_current_state{current_state_value="Established"} == 1
+            )
+            or
+            (
+              trident_amr_desired_state{desired_state_value="Promoted"} == 1
+              unless
+              trident_amr_current_state{current_state_value="Promoted"} == 1
+            )
+          for: 1h
+          labels:
+            severity: warning
+            component: trident-protect
+
+    # ── TMR Health ──
+    - name: trident-protect.tmr
+      rules:
+        - alert: TMRFailed
+          annotations:
+            summary: >-
+              TMR {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} has failed
+            description: >-
+              TridentMirrorRelationship {{`{{ $labels.name }}`}} in namespace {{`{{ $labels.namespace }}`}}
+              is in failed state. The underlying SnapMirror relationship may need manual intervention.
+          expr: |
+            trident_tmr_state{mirror_state="failed"} == 1
+          for: 5m
+          labels:
+            severity: critical
+            component: trident
+
+        - alert: TMRNotEstablished
+          annotations:
+            summary: >-
+              TMR {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} not established
+            description: >-
+              TridentMirrorRelationship {{`{{ $labels.name }}`}} has not reached established state
+              for over 45 minutes. The SnapMirror baseline transfer may be stalled.
+          expr: |
+            trident_tmr_state{mirror_state="established"} == 0
+            and
+            trident_tmr_info{desired_state="established"} == 1
+          for: 45m
+          labels:
+            severity: warning
+            component: trident
+
+    # ── AppVault Health ──
+    - name: trident-protect.appvault
+      rules:
+        - alert: AppVaultUnavailable
+          annotations:
+            summary: >-
+              AppVault {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} is unavailable
+            description: >-
+              AppVault {{`{{ $labels.name }}`}} is not in Available state.
+              Snapshots and backups cannot be stored.
+          expr: |
+            trident_appvault_state{vault_state="Available"} == 0
+          for: 10m
+          labels:
+            severity: critical
+            component: trident-protect
+
+    # ── AMU Health ──
+    - name: trident-protect.amu
+      rules:
+        - alert: AMUFailed
+          annotations:
+            summary: >-
+              AppMirrorUpdate {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} failed
+            description: >-
+              An AppMirrorUpdate in namespace {{`{{ $labels.namespace }}`}} has failed.
+              This may block the AMR from becoming Established.
+          expr: |
+            trident_amu_state{amu_state="Failed"} == 1
+          for: 5m
+          labels:
+            severity: warning
+            component: trident-protect
+
+        - alert: AMUStuck
+          annotations:
+            summary: >-
+              AppMirrorUpdate {{`{{ $labels.namespace }}`}}/{{`{{ $labels.name }}`}} stuck running
+            description: >-
+              An AppMirrorUpdate has been in Running state for over {{ .Values.drMonitoring.alerts.transferStaleThreshold }}.
+              The data transfer may be stalled.
+          expr: |
+            trident_amu_state{amu_state="Running"} == 1
+          for: {{ .Values.drMonitoring.alerts.transferStaleThreshold }}
+          labels:
+            severity: warning
+            component: trident-protect
+
+    # ── Snapshot RPO Compliance ──
+    - name: trident-protect.snapshots
+      rules:
+        - alert: NoRecentSnapshots
+          annotations:
+            summary: >-
+              No recent snapshots for app in namespace {{`{{ $labels.namespace }}`}}
+            description: >-
+              No snapshots in Completed state found for namespace {{`{{ $labels.namespace }}`}}.
+              The schedule may be disabled or failing.
+          expr: |
+            count by (namespace) (trident_snapshot_state{snapshot_state="Completed"} == 1) < 1
+            or
+            absent(trident_snapshot_state{snapshot_state="Completed"} == 1)
+          for: {{ .Values.drMonitoring.alerts.snapshotOverdueThreshold }}
+          labels:
+            severity: warning
+            component: trident-protect
+{{- end }}

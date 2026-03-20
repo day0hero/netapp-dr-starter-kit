@@ -187,6 +187,14 @@ clusterGroup:
       namespace: wordpress
       argoProject: workload
       path: charts/all/wordpress
+    dr-monitoring:
+      name: dr-monitoring
+      namespace: openshift-monitoring
+      argoProject: trident
+      path: charts/all/dr-monitoring
+      overrides:
+        - name: drMonitoring.clusterRole
+          value: hub
     boutique:
       name: boutique
       namespace: boutique

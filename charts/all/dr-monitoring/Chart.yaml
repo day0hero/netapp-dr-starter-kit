@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dr-monitoring
+description: Monitoring stack for Trident Protect DR - kube-state-metrics CRS, PrometheusRules, and Grafana dashboard
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

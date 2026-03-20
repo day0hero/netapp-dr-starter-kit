@@ -1,0 +1,27 @@
+drMonitoring:
+  enabled: true
+  namespace: openshift-monitoring
+
+  clusterRole: hub  # "hub" or "secondary" - controls which alerts/dashboards are relevant
+
+  ksmCRS:
+    enabled: true
+    image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.15.0
+    replicas: 1
+    resources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+  alerts:
+    enabled: true
+    amrEstablishingThreshold: 30m
+    snapshotOverdueThreshold: 2h
+    transferStaleThreshold: 4h
+
+  dashboard:
+    enabled: true
+    namespace: openshift-config-managed

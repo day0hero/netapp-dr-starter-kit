@@ -1,0 +1,294 @@
+{{- if .Values.drMonitoring.ksmCRS.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dr-custom-resource-state
+  namespace: openshift-monitoring
+  labels:
+    app.kubernetes.io/name: dr-monitoring
+    app.kubernetes.io/component: metrics
+data:
+  custom-resource-state.yaml: |
+    spec:
+      resources:
+        # ── AppMirrorRelationship metrics ──
+        - groupVersionKind:
+            group: protect.trident.netapp.io
+            version: v1
+            kind: AppMirrorRelationship
+          labelsFromPath:
+            name:
+              - metadata
+              - name
+            namespace:
+              - metadata
+              - namespace
+            source_app:
+              - spec
+              - sourceApplicationName
+            desired_state:
+              - spec
+              - desiredState
+          metrics:
+            - name: trident_amr_info
+              help: "AppMirrorRelationship info with state labels"
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    state:
+                      - status
+                      - state
+                    source_app_vault:
+                      - spec
+                      - sourceAppVaultRef
+                    destination_app_vault:
+                      - spec
+                      - destinationAppVaultRef
+                    storage_class:
+                      - spec
+                      - storageClassName
+
+            - name: trident_amr_desired_state
+              help: "1 if AMR desired state matches the label"
+              each:
+                type: StateSet
+                stateSet:
+                  labelName: desired_state_value
+                  path:
+                    - spec
+                    - desiredState
+                  list:
+                    - Established
+                    - Promoted
+
+            - name: trident_amr_current_state
+              help: "1 if AMR current state matches the label"
+              each:
+                type: StateSet
+                stateSet:
+                  labelName: current_state_value
+                  path:
+                    - status
+                    - state
+                  list:
+                    - Established
+                    - Establishing
+                    - Promoted
+                    - Failed
+                    - Failover
+                    - ""
+
+            - name: trident_amr_condition
+              help: "AMR condition status (1=True, 0=False, -1=Unknown)"
+              each:
+                type: Gauge
+                gauge:
+                  path:
+                    - status
+                    - conditions
+                  labelsFromPath:
+                    condition_type:
+                      - type
+                    reason:
+                      - reason
+                  valueFrom:
+                    - status
+                  nilIsZero: false
+              commonLabels:
+                _condition_gauge: "true"
+
+        # ── TridentMirrorRelationship metrics ──
+        - groupVersionKind:
+            group: trident.netapp.io
+            version: v1
+            kind: TridentMirrorRelationship
+          labelsFromPath:
+            name:
+              - metadata
+              - name
+            namespace:
+              - metadata
+              - namespace
+          metrics:
+            - name: trident_tmr_info
+              help: "TridentMirrorRelationship info"
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    desired_state:
+                      - spec
+                      - state
+                    local_pvc:
+                      - spec
+                      - volumeMappings
+                      - "0"
+                      - localPVCName
+
+            - name: trident_tmr_state
+              help: "1 if TMR state matches the label"
+              each:
+                type: StateSet
+                stateSet:
+                  labelName: mirror_state
+                  path:
+                    - status
+                    - conditions
+                    - "0"
+                    - mirrorState
+                  list:
+                    - established
+                    - uninitialized
+                    - establishing
+                    - failed
+                    - ""
+
+        # ── Snapshot metrics ──
+        - groupVersionKind:
+            group: protect.trident.netapp.io
+            version: v1
+            kind: Snapshot
+          labelsFromPath:
+            name:
+              - metadata
+              - name
+            namespace:
+              - metadata
+              - namespace
+          metrics:
+            - name: trident_snapshot_info
+              help: "Snapshot info"
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    state:
+                      - spec
+                      - state
+                    app_ref:
+                      - spec
+                      - applicationRef
+                    reclaim_policy:
+                      - spec
+                      - reclaimPolicy
+
+            - name: trident_snapshot_state
+              help: "1 if snapshot state matches the label"
+              each:
+                type: StateSet
+                stateSet:
+                  labelName: snapshot_state
+                  path:
+                    - spec
+                    - state
+                  list:
+                    - Completed
+                    - Running
+                    - Failed
+                    - ""
+
+        # ── AppVault metrics ──
+        - groupVersionKind:
+            group: protect.trident.netapp.io
+            version: v1
+            kind: AppVault
+          labelsFromPath:
+            name:
+              - metadata
+              - name
+            namespace:
+              - metadata
+              - namespace
+          metrics:
+            - name: trident_appvault_info
+              help: "AppVault info with state"
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    state:
+                      - status
+                      - state
+
+            - name: trident_appvault_state
+              help: "1 if AppVault state matches the label"
+              each:
+                type: StateSet
+                stateSet:
+                  labelName: vault_state
+                  path:
+                    - status
+                    - state
+                  list:
+                    - Available
+                    - Unavailable
+                    - ""
+
+        # ── Schedule metrics ──
+        - groupVersionKind:
+            group: protect.trident.netapp.io
+            version: v1
+            kind: Schedule
+          labelsFromPath:
+            name:
+              - metadata
+              - name
+            namespace:
+              - metadata
+              - namespace
+          metrics:
+            - name: trident_schedule_info
+              help: "Schedule info"
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    enabled:
+                      - spec
+                      - enabled
+                    granularity:
+                      - spec
+                      - granularity
+                    app_ref:
+                      - spec
+                      - applicationRef
+
+        # ── AppMirrorUpdate metrics ──
+        - groupVersionKind:
+            group: protect.trident.netapp.io
+            version: v1
+            kind: AppMirrorUpdate
+          labelsFromPath:
+            name:
+              - metadata
+              - name
+            namespace:
+              - metadata
+              - namespace
+          metrics:
+            - name: trident_amu_info
+              help: "AppMirrorUpdate info with state"
+              each:
+                type: Info
+                info:
+                  labelsFromPath:
+                    state:
+                      - status
+                      - state
+
+            - name: trident_amu_state
+              help: "1 if AMU state matches the label"
+              each:
+                type: StateSet
+                stateSet:
+                  labelName: amu_state
+                  path:
+                    - status
+                    - state
+                  list:
+                    - Running
+                    - Completed
+                    - Failed
+                    - ""
+{{- end }}

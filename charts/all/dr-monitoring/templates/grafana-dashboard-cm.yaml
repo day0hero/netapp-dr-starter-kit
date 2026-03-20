@@ -1,0 +1,15 @@
+{{- if .Values.drMonitoring.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-trident-dr
+  namespace: {{ .Values.drMonitoring.dashboard.namespace | default "openshift-config-managed" }}
+  labels:
+    app.kubernetes.io/name: dr-monitoring
+    app.kubernetes.io/component: dashboard
+    grafana_dashboard: "1"
+    console.openshift.io/dashboard: "true"
+data:
+  trident-dr-dashboard.json: |-
+{{ .Files.Get "dashboards/trident-dr.json" | indent 4 }}
+{{- end }}

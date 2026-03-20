@@ -1,0 +1,22 @@
+{{- if .Values.drMonitoring.ksmCRS.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dr-ksm-custom-resource
+  namespace: openshift-monitoring
+  labels:
+    app.kubernetes.io/name: dr-ksm-custom-resource
+    app.kubernetes.io/component: metrics
+spec:
+  endpoints:
+    - honorLabels: true
+      interval: 60s
+      path: /metrics
+      port: http-metrics
+  namespaceSelector:
+    matchNames:
+      - openshift-monitoring
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dr-ksm-custom-resource
+{{- end }}
