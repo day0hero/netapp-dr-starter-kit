@@ -1,0 +1,25 @@
+{{- range .Values.tridentProtect.appMirrorRelationships }}
+---
+apiVersion: protect.trident.netapp.io/v1
+kind: AppMirrorRelationship
+metadata:
+  name: {{ .name }}
+  namespace: {{ .sourceApplicationNamespace | default .sourceApplicationName }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  desiredState: {{ .desiredState | default "Established" }}
+  sourceAppVaultRef: {{ .sourceAppVaultRef }}
+  destinationAppVaultRef: {{ .destinationAppVaultRef }}
+  sourceApplicationName: {{ .sourceApplicationName }}
+  {{- if .namespaceMapping }}
+  namespaceMapping:
+    {{- toYaml .namespaceMapping | nindent 4 }}
+  {{- else }}
+  namespaceMapping: []
+  {{- end }}
+  recurrenceRule: {{ .recurrenceRule | default "DTSTART:20240101T000000Z\\nRRULE:FREQ=HOURLY;INTERVAL=1" | quote }}
+  {{- if .storageClassName }}
+  storageClassName: {{ .storageClassName }}
+  {{- end }}
+{{- end }}

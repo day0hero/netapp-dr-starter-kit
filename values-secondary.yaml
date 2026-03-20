@@ -132,6 +132,11 @@ clusterGroup:
       namespace: trident-protect
       argoProject: trident
       path: charts/all/trident-protect-config
+      ignoreDifferences:
+        - group: protect.trident.netapp.io
+          kind: AppMirrorRelationship
+          jqPathExpressions:
+            - .spec.sourceApplicationUID
   imperative:
     # NOTE: We *must* use lists and not hashes. As hashes lose ordering once parsed by helm
     # The default schedule is every 10 minutes: imperative.schedule

@@ -67,14 +67,14 @@ tridentProtect:
   #           matchLabels:
   #             app: postgres
 
-  # AMR reconcile CronJob configuration
-  # This CronJob resolves Application UIDs and creates/patches AMRs automatically
-  amrReconcile:
-    schedule: "*/3 * * * *"
+  # AMR PostSync hook configuration
+  # The PostSync hook patches sourceApplicationUID after ArgoCD syncs
+  amrPostSync:
     image: image-registry.openshift-image-registry.svc:5000/openshift/tools
 
   # AppMirrorRelationships for DR replication
-  # sourceApplicationUID is resolved automatically by the amr-reconcile CronJob
+  # Created declaratively by Helm; sourceApplicationUID is patched by a
+  # PostSync hook after the Application resource exists.
   appMirrorRelationships: []
   # Example:
   # appMirrorRelationships:

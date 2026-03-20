@@ -1,0 +1,102 @@
+{{- if .Values.tridentProtect.appMirrorRelationships }}
+{{- if gt (len .Values.tridentProtect.appMirrorRelationships) 0 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amr-uid-patch-script
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+data:
+  patch-uids.sh: |
+    #!/bin/bash
+    set -uo pipefail
+    TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+    API="https://kubernetes.default.svc"
+
+    api() {
+      curl -sk -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json" "$@"
+    }
+
+    ERRORS=0
+    {{- range .Values.tridentProtect.appMirrorRelationships }}
+
+    APP_NAME="{{ .sourceApplicationName }}"
+    APP_NS="{{ .sourceApplicationNamespace | default .sourceApplicationName }}"
+    AMR_NAME="{{ .name }}"
+    BASE="${API}/apis/protect.trident.netapp.io/v1/namespaces/${APP_NS}"
+
+    echo "--- ${AMR_NAME}: looking up ${APP_NAME} UID in ${APP_NS} ---"
+
+    RETRIES=0
+    APP_UID=""
+    while [ -z "${APP_UID}" ] && [ ${RETRIES} -lt 20 ]; do
+      APP_UID=$(api "${BASE}/applications/${APP_NAME}" | jq -r '.metadata.uid // empty')
+      if [ -z "${APP_UID}" ]; then
+        echo "  Application not ready yet, retrying (${RETRIES}/20)..."
+        sleep 5
+        RETRIES=$((RETRIES + 1))
+      fi
+    done
+
+    if [ -z "${APP_UID}" ]; then
+      echo "  ERROR: Application '${APP_NAME}' UID not available after retries"
+      ERRORS=$((ERRORS + 1))
+    else
+      echo "  Application UID: ${APP_UID}"
+      CURRENT_UID=$(api "${BASE}/appmirrorrelationships/${AMR_NAME}" | jq -r '.spec.sourceApplicationUID // empty')
+      if [ "${CURRENT_UID}" = "${APP_UID}" ]; then
+        echo "  UID already correct — no patch needed"
+      else
+        echo "  Patching sourceApplicationUID..."
+        RESULT=$(api -X PATCH "${BASE}/appmirrorrelationships/${AMR_NAME}" \
+          -H "Content-Type: application/merge-patch+json" \
+          -d "{\"spec\":{\"sourceApplicationUID\":\"${APP_UID}\"}}")
+        PATCHED=$(echo "${RESULT}" | jq -r '.spec.sourceApplicationUID // empty')
+        if [ "${PATCHED}" = "${APP_UID}" ]; then
+          echo "  Patched successfully"
+        else
+          echo "  Patch may have failed: $(echo "${RESULT}" | jq -r '.message // "unknown error"')"
+          ERRORS=$((ERRORS + 1))
+        fi
+      fi
+    fi
+    {{- end }}
+
+    echo "=== AMR UID patch complete (errors: ${ERRORS}) ==="
+    exit ${ERRORS}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: amr-uid-patch
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: trident-protect-amr-reconcile
+      containers:
+        - name: patch-uids
+          image: {{ .Values.tridentProtect.amrPostSync.image | default "image-registry.openshift-image-registry.svc:5000/openshift/tools" }}
+          command: ["/bin/bash", "/scripts/patch-uids.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: amr-uid-patch-script
+            items:
+              - key: patch-uids.sh
+                path: patch-uids.sh
+{{- end }}
+{{- end }}

@@ -177,6 +177,11 @@ clusterGroup:
       namespace: trident-protect
       argoProject: trident
       path: charts/all/trident-protect-config
+      ignoreDifferences:
+        - group: protect.trident.netapp.io
+          kind: AppMirrorRelationship
+          jqPathExpressions:
+            - .spec.sourceApplicationUID
     wordpress:
       name: wordpress
       namespace: wordpress
