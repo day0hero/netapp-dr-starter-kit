@@ -1,0 +1,149 @@
+{{- if .Values.tridentProtect.applications }}
+{{- if gt (len .Values.tridentProtect.applications) 0 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amr-uid-publish-script
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+data:
+  publish.py: |
+    #!/usr/bin/env python3
+    """Publish local Application UIDs to S3 for cross-cluster AMR consumption."""
+    import json, os, sys, datetime, hashlib, hmac, urllib.request, urllib.error
+
+    TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    API = "https://kubernetes.default.svc"
+    APPS = json.loads(os.environ.get("APP_DEFINITIONS", "[]"))
+    BUCKET = os.environ["S3_BUCKET"]
+    REGION = os.environ["S3_REGION"]
+    ACCESS_KEY = os.environ["AWS_ACCESS_KEY_ID"]
+    SECRET_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
+    S3_KEY = "dr-metadata/application-uids.json"
+
+    def kube_get(path):
+        token = open(TOKEN_PATH).read().strip()
+        req = urllib.request.Request(
+            f"{API}{path}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            return json.loads(urllib.request.urlopen(req, context=ctx).read())
+        except urllib.error.HTTPError as e:
+            print(f"  API error {e.code}: {e.read().decode()}", file=sys.stderr)
+            return None
+
+    def sign(key, msg):
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    def s3_put(body_bytes):
+        host = f"{BUCKET}.s3.{REGION}.amazonaws.com"
+        now = datetime.datetime.now(datetime.timezone.utc)
+        datestamp = now.strftime("%Y%m%d")
+        amzdate = now.strftime("%Y%m%dT%H%M%SZ")
+        payload_hash = hashlib.sha256(body_bytes).hexdigest()
+
+        canonical = "\n".join([
+            "PUT", f"/{S3_KEY}", "",
+            f"host:{host}", f"x-amz-content-sha256:{payload_hash}",
+            f"x-amz-date:{amzdate}", "",
+            "host;x-amz-content-sha256;x-amz-date", payload_hash,
+        ])
+        scope = f"{datestamp}/{REGION}/s3/aws4_request"
+        string_to_sign = "\n".join([
+            "AWS4-HMAC-SHA256", amzdate, scope,
+            hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        ])
+        k = sign(sign(sign(sign(
+            f"AWS4{SECRET_KEY}".encode("utf-8"), datestamp),
+            REGION), "s3"), "aws4_request")
+        sig = hmac.new(k, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+        auth = (f"AWS4-HMAC-SHA256 Credential={ACCESS_KEY}/{scope},"
+                f"SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
+                f"Signature={sig}")
+
+        req = urllib.request.Request(
+            f"https://{host}/{S3_KEY}", data=body_bytes, method="PUT",
+            headers={
+                "Host": host, "x-amz-date": amzdate,
+                "x-amz-content-sha256": payload_hash,
+                "Authorization": auth, "Content-Type": "application/json",
+            },
+        )
+        urllib.request.urlopen(req)
+
+    uids = {}
+    for app in APPS:
+        name = app["name"]
+        ns = app["namespaces"][0]["name"]
+        data = kube_get(f"/apis/protect.trident.netapp.io/v1/namespaces/{ns}/applications/{name}")
+        if data and "metadata" in data:
+            uid = data["metadata"]["uid"]
+            uids[name] = {"uid": uid, "namespace": ns}
+            print(f"  {name}: {uid}")
+        else:
+            print(f"  {name}: not found (skipping)")
+
+    if uids:
+        body = json.dumps({"applicationUIDs": uids}, indent=2).encode("utf-8")
+        s3_put(body)
+        print(f"Published {len(uids)} UID(s) to s3://{BUCKET}/{S3_KEY}")
+    else:
+        print("No UIDs to publish")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: amr-uid-publish
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: trident-protect-amr-reconcile
+      containers:
+        - name: publish
+          image: {{ .Values.tridentProtect.amrPostSync.image | default "image-registry.openshift-image-registry.svc:5000/openshift/tools" }}
+          command: ["python3", "/scripts/publish.py"]
+          env:
+            - name: APP_DEFINITIONS
+              value: {{ .Values.tridentProtect.applications | toJson | quote }}
+            - name: S3_BUCKET
+              value: {{ .Values.tridentProtect.appVault.s3.bucketName | quote }}
+            - name: S3_REGION
+              value: {{ .Values.tridentProtect.appVault.s3.region | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tridentProtect.appVault.credentials.secretName }}
+                  key: accessKeyID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tridentProtect.appVault.credentials.secretName }}
+                  key: secretAccessKey
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: amr-uid-publish-script
+            items:
+              - key: publish.py
+                path: publish.py
+{{- end }}
+{{- end }}
