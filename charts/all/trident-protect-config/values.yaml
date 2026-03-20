@@ -49,7 +49,8 @@ tridentProtect:
   # ONTAP cluster and SVM peering (runs as a CronJob for self-healing)
   ontapPeering:
     enabled: true
-    schedule: "*/2 * * * *"
+    # role: initiator (hub) creates peers first; acceptor (secondary) follows
+    role: initiator
     image: image-registry.openshift-image-registry.svc:5000/openshift/tools
     secretName: ontap-cluster-admin-creds
     vaultKey: secret/data/global/fsx-cluster-admin

@@ -1,5 +1,6 @@
 {{- if .Values.tridentProtect.ontapPeering.enabled }}
 {{- if and .Values.tridentFSX.clusterLIF .Values.tridentFSX.peer.interclusterIPs }}
+{{- $role := .Values.tridentProtect.ontapPeering.role | default "initiator" }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -8,7 +9,11 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "3"
 spec:
-  schedule: {{ .Values.tridentProtect.ontapPeering.schedule | quote }}
+  {{- if eq $role "acceptor" }}
+  schedule: "2-58/4 * * * *"
+  {{- else }}
+  schedule: "*/4 * * * *"
+  {{- end }}
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
@@ -33,12 +38,13 @@ spec:
                   LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
                   REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
                   REMOTE_IC_IPS='{{ .Values.tridentFSX.peer.interclusterIPs | toJson }}'
+                  ROLE="{{ $role }}"
 
                   api() {
                     curl -sk -u "${AUTH}" -H "Content-Type: application/json" "$@"
                   }
 
-                  echo "=== ONTAP Peering Reconcile ($(date -u +%H:%M:%S)) ==="
+                  echo "=== ONTAP Peering Reconcile ($(date -u +%H:%M:%S)) role=${ROLE} ==="
                   echo "  Local: ${LOCAL_CLUSTER_MGMT} / ${LOCAL_SVM}"
                   echo "  Remote SVM: ${REMOTE_SVM}"
 
@@ -51,17 +57,25 @@ spec:
                   fi
 
                   # ---- Cluster peering ----
-                  PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers?fields=status,name,uuid")
+                  PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers?fields=status,name,uuid,authentication")
                   PEER_COUNT=$(echo "${PEERS}" | jq '.num_records // 0')
 
                   if [ "${PEER_COUNT}" -gt 0 ]; then
                     PEER_STATE=$(echo "${PEERS}" | jq -r '.records[0].status.state // "unknown"')
                     PEER_UUID=$(echo "${PEERS}" | jq -r '.records[0].uuid // empty')
                     PEER_NAME=$(echo "${PEERS}" | jq -r '.records[0].name // empty')
-                    echo "Cluster peer exists: ${PEER_NAME} (${PEER_STATE})"
+                    AUTH_STATE=$(echo "${PEERS}" | jq -r '.records[0].authentication.state // "unknown"')
+                    echo "Cluster peer exists: ${PEER_NAME} (${PEER_STATE}, auth=${AUTH_STATE})"
+
+                    if [ "${PEER_STATE}" = "unavailable" ]; then
+                      echo "  Peer unavailable — deleting stale peer for recreation"
+                      api -X DELETE "https://${LOCAL_CLUSTER_MGMT}/api/cluster/peers/${PEER_UUID}" >/dev/null 2>&1
+                      echo "  Deleted — will recreate next schedule"
+                      exit 0
+                    fi
 
                     if [ "${PEER_STATE}" != "available" ]; then
-                      echo "  Peer not yet available — will retry next schedule"
+                      echo "  Peer not yet available (${PEER_STATE}) — will retry next schedule"
                       exit 0
                     fi
                   else
@@ -83,11 +97,12 @@ spec:
                   fi
 
                   # ---- SVM peering ----
-                  SVM_PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers?fields=state,svm,peer")
+                  SVM_PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers?fields=state,svm,peer,uuid")
                   SVM_PEER_COUNT=$(echo "${SVM_PEERS}" | jq '.num_records // 0')
 
                   if [ "${SVM_PEER_COUNT}" -gt 0 ]; then
                     SVM_STATE=$(echo "${SVM_PEERS}" | jq -r '.records[0].state // "unknown"')
+                    SVM_UUID=$(echo "${SVM_PEERS}" | jq -r '.records[0].uuid // empty')
                     echo "SVM peer exists (${SVM_STATE})"
 
                     if [ "${SVM_STATE}" = "peered" ]; then
@@ -95,13 +110,27 @@ spec:
                       exit 0
                     fi
 
-                    if [ "${SVM_STATE}" = "initiated" ] || [ "${SVM_STATE}" = "pending" ]; then
-                      echo "  SVM peer in progress — will check again next schedule"
+                    if [ "${SVM_STATE}" = "pending" ]; then
+                      echo "  Accepting pending SVM peer ${SVM_UUID}..."
+                      RESP=$(api -X PATCH "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers/${SVM_UUID}" \
+                        -d '{"state":"peered"}' -w "\n%{http_code}" 2>/dev/null)
+                      HTTP=$(echo "${RESP}" | tail -1)
+                      echo "  HTTP ${HTTP}"
+                      exit 0
+                    fi
+
+                    if [ "${SVM_STATE}" = "initiated" ]; then
+                      echo "  SVM peer initiated — waiting for remote to accept"
                       exit 0
                     fi
                   fi
 
                   if [ "${SVM_PEER_COUNT}" -eq 0 ]; then
+                    if [ "${ROLE}" = "acceptor" ]; then
+                      echo "  Acceptor: no SVM peer yet — waiting for initiator to create"
+                      exit 0
+                    fi
+
                     SVM_PEER_ALIAS="${REMOTE_SVM}"
                     if [ "${LOCAL_SVM}" = "${REMOTE_SVM}" ]; then
                       SVM_PEER_ALIAS="${REMOTE_SVM}-${PEER_NAME}"
