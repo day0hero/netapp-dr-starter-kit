@@ -1,0 +1,7 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit

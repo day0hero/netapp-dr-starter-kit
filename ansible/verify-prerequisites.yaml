@@ -1,0 +1,444 @@
+---
+# =============================================================================
+# NetApp DR Starter Kit - Prerequisites Verification Playbook
+# =============================================================================
+#
+# Validates that all credentials, permissions, and tools are in place
+# before running the DR infrastructure setup (either manually or via Pipeline).
+#
+# Checks performed:
+#   1. Required CLI tools (aws, terraform, oc, yq, git, jq)
+#   2. AWS credential validity (STS)
+#   3. AWS IAM service-level access (FSx, EC2, S3, DynamoDB, SecretsManager)
+#   4. AWS IAM action-level simulation (when iam:SimulatePrincipalPolicy is available)
+#   5. OpenShift cluster access (prod + DR kubeconfigs)
+#   6. Git repository write access
+#   7. FSx admin password availability
+#
+# Usage:
+#   ansible-playbook ansible/verify-prerequisites.yaml \
+#     -e prod_kubeconfig=/path/to/prod/kubeconfig \
+#     -e dr_kubeconfig=/path/to/dr/kubeconfig \
+#     [-e git_repo_url=git@github.com:org/repo.git] \
+#     [-e git_branch=main]
+#
+# =============================================================================
+
+- name: Verify DR Infrastructure Prerequisites
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _check_results: []
+    _project_root: "{{ playbook_dir }}/.."
+    git_branch: "{{ lookup('env', 'GIT_BRANCH') | default('main', true) }}"
+    git_repo_url: "{{ lookup('env', 'GIT_REPO_URL') | default('', true) }}"
+
+  tasks:
+    # =========================================================================
+    # Phase 1: Required CLI Tools
+    # =========================================================================
+    - name: "PHASE 1: Check required CLI tools"
+      ansible.builtin.debug:
+        msg: "Checking required CLI tools..."
+
+    - name: Check for required tools
+      ansible.builtin.command: "which {{ item }}"
+      loop:
+        - aws
+        - terraform
+        - oc
+        - yq
+        - git
+        - jq
+        - python3
+      register: _tool_checks
+      changed_when: false
+      failed_when: false
+
+    - name: Report tool availability
+      ansible.builtin.set_fact:
+        _tool_results: >-
+          {{ _tool_results | default([]) + [{
+            'tool': item.item,
+            'available': item.rc == 0,
+            'path': item.stdout | default('not found') | trim
+          }] }}
+      loop: "{{ _tool_checks.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Display tool results
+      ansible.builtin.debug:
+        msg: "{{ '✓' if item.available else '✗' }} {{ item.tool }}: {{ item.path }}"
+      loop: "{{ _tool_results }}"
+      loop_control:
+        label: "{{ item.tool }}"
+
+    - name: Fail if critical tools are missing
+      ansible.builtin.fail:
+        msg: >-
+          Missing required tools: {{ _tool_results | selectattr('available', 'equalto', false)
+          | map(attribute='tool') | list | join(', ') }}
+      when: _tool_results | selectattr('available', 'equalto', false) | list | length > 0
+
+    # =========================================================================
+    # Phase 2: AWS Credentials
+    # =========================================================================
+    - name: "PHASE 2: Verify AWS credentials"
+      ansible.builtin.debug:
+        msg: "Checking AWS credentials..."
+
+    - name: Get AWS caller identity
+      ansible.builtin.command: aws sts get-caller-identity --output json
+      register: _aws_identity
+      changed_when: false
+      failed_when: false
+
+    - name: Parse AWS identity
+      when: _aws_identity.rc == 0
+      block:
+        - name: Set AWS identity facts
+          ansible.builtin.set_fact:
+            _aws_account: "{{ (_aws_identity.stdout | from_json).Account }}"
+            _aws_arn: "{{ (_aws_identity.stdout | from_json).Arn }}"
+            _aws_user_id: "{{ (_aws_identity.stdout | from_json).UserId }}"
+
+        - name: Display AWS identity
+          ansible.builtin.debug:
+            msg:
+              - "✓ AWS credentials valid"
+              - "  Account:  {{ _aws_account }}"
+              - "  ARN:      {{ _aws_arn }}"
+              - "  User ID:  {{ _aws_user_id }}"
+
+    - name: Fail if AWS credentials are invalid
+      ansible.builtin.fail:
+        msg: |
+          AWS credentials are not configured or invalid.
+          Ensure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set,
+          or ~/.aws/credentials is configured.
+          Error: {{ _aws_identity.stderr | default('unknown error') }}
+      when: _aws_identity.rc != 0
+
+    # =========================================================================
+    # Phase 3: AWS Service-Level Access
+    # =========================================================================
+    - name: "PHASE 3: Verify AWS service access"
+      ansible.builtin.debug:
+        msg: "Checking AWS service-level permissions..."
+
+    - name: Check FSx access
+      ansible.builtin.command: aws fsx describe-file-systems --max-results 1 --output json
+      register: _fsx_access
+      changed_when: false
+      failed_when: false
+
+    - name: Check EC2 access
+      ansible.builtin.command: aws ec2 describe-vpcs --max-results 1 --output json
+      register: _ec2_access
+      changed_when: false
+      failed_when: false
+
+    - name: Check S3 access
+      ansible.builtin.command: aws s3api list-buckets --output json
+      register: _s3_access
+      changed_when: false
+      failed_when: false
+
+    - name: Check DynamoDB access
+      ansible.builtin.command: aws dynamodb list-tables --limit 1 --output json
+      register: _dynamodb_access
+      changed_when: false
+      failed_when: false
+
+    - name: Check Secrets Manager access
+      ansible.builtin.command: aws secretsmanager list-secrets --max-results 1 --output json
+      register: _sm_access
+      changed_when: false
+      failed_when: false
+
+    - name: Compile service access results
+      ansible.builtin.set_fact:
+        _service_results:
+          - name: "FSx (fsx:DescribeFileSystems)"
+            ok: "{{ _fsx_access.rc == 0 }}"
+          - name: "EC2 (ec2:DescribeVpcs)"
+            ok: "{{ _ec2_access.rc == 0 }}"
+          - name: "S3 (s3:ListBuckets)"
+            ok: "{{ _s3_access.rc == 0 }}"
+          - name: "DynamoDB (dynamodb:ListTables)"
+            ok: "{{ _dynamodb_access.rc == 0 }}"
+          - name: "Secrets Manager (secretsmanager:ListSecrets)"
+            ok: "{{ _sm_access.rc == 0 }}"
+
+    - name: Display service access results
+      ansible.builtin.debug:
+        msg: "{{ '✓' if item.ok | bool else '✗' }} {{ item.name }}"
+      loop: "{{ _service_results }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Warn about missing service permissions
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Missing access to: {{ _service_results | selectattr('ok', 'equalto', 'False')
+          | map(attribute='name') | list | join(', ') }}. The pipeline may fail during provisioning.
+      when: _service_results | selectattr('ok', 'equalto', 'False') | list | length > 0
+
+    # =========================================================================
+    # Phase 4: Detailed IAM Permission Simulation
+    # =========================================================================
+    - name: "PHASE 4: Simulate IAM permissions (optional)"
+      ansible.builtin.debug:
+        msg: "Attempting detailed IAM permission simulation..."
+
+    - name: Simulate required IAM actions
+      ansible.builtin.command: >-
+        aws iam simulate-principal-policy
+          --policy-source-arn {{ _aws_arn }}
+          --action-names {{ item.actions | join(' ') }}
+          --output json
+      loop:
+        - service: FSx
+          actions:
+            - "fsx:CreateFileSystem"
+            - "fsx:DescribeFileSystems"
+            - "fsx:DeleteFileSystem"
+            - "fsx:CreateStorageVirtualMachine"
+            - "fsx:DescribeStorageVirtualMachines"
+        - service: EC2
+          actions:
+            - "ec2:CreateSecurityGroup"
+            - "ec2:AuthorizeSecurityGroupIngress"
+            - "ec2:AuthorizeSecurityGroupEgress"
+            - "ec2:CreateVpcPeeringConnection"
+            - "ec2:AcceptVpcPeeringConnection"
+            - "ec2:CreateRoute"
+            - "ec2:DescribeRouteTables"
+            - "ec2:DescribeVpcs"
+            - "ec2:DescribeSubnets"
+        - service: S3
+          actions:
+            - "s3:CreateBucket"
+            - "s3:PutObject"
+            - "s3:GetObject"
+            - "s3:ListBucket"
+            - "s3:PutBucketVersioning"
+            - "s3:PutEncryptionConfiguration"
+        - service: DynamoDB
+          actions:
+            - "dynamodb:CreateTable"
+            - "dynamodb:PutItem"
+            - "dynamodb:GetItem"
+            - "dynamodb:DeleteItem"
+        - service: SecretsManager
+          actions:
+            - "secretsmanager:CreateSecret"
+            - "secretsmanager:PutSecretValue"
+            - "secretsmanager:DescribeSecret"
+      loop_control:
+        label: "{{ item.service }}"
+      register: _iam_simulation
+      changed_when: false
+      failed_when: false
+
+    - name: Parse IAM simulation results
+      when: _iam_simulation.results[0].rc == 0
+      block:
+        - name: Evaluate simulation results
+          ansible.builtin.set_fact:
+            _iam_results: >-
+              {{ _iam_results | default([]) + [{
+                'service': item.item.service,
+                'allowed': (item.stdout | from_json).EvaluationResults
+                  | selectattr('EvalDecision', 'equalto', 'allowed') | list | length,
+                'denied': (item.stdout | from_json).EvaluationResults
+                  | selectattr('EvalDecision', 'ne', 'allowed') | list | length,
+                'denied_actions': (item.stdout | from_json).EvaluationResults
+                  | selectattr('EvalDecision', 'ne', 'allowed')
+                  | map(attribute='EvalActionName') | list
+              }] }}
+          loop: "{{ _iam_simulation.results }}"
+          loop_control:
+            label: "{{ item.item.service }}"
+          when: item.rc == 0
+
+        - name: Display IAM simulation results
+          ansible.builtin.debug:
+            msg: >-
+              {{ '✓' if item.denied == 0 else '✗' }} {{ item.service }}:
+              {{ item.allowed }} allowed, {{ item.denied }} denied
+              {{ ('  Denied: ' ~ item.denied_actions | join(', ')) if item.denied > 0 else '' }}
+          loop: "{{ _iam_results | default([]) }}"
+          loop_control:
+            label: "{{ item.service }}"
+
+    - name: IAM simulation not available
+      ansible.builtin.debug:
+        msg: >-
+          IAM policy simulation skipped (iam:SimulatePrincipalPolicy not available).
+          Service-level checks in Phase 3 were used instead.
+      when: _iam_simulation.results[0].rc != 0
+
+    # =========================================================================
+    # Phase 5: OpenShift Cluster Access
+    # =========================================================================
+    - name: "PHASE 5: Verify OpenShift cluster access"
+      ansible.builtin.debug:
+        msg: "Checking cluster connectivity..."
+
+    - name: Validate kubeconfig variables
+      ansible.builtin.fail:
+        msg: >-
+          Both prod_kubeconfig and dr_kubeconfig are required.
+          Pass via: -e prod_kubeconfig=/path/to/kubeconfig -e dr_kubeconfig=/path/to/kubeconfig
+      when: (prod_kubeconfig is not defined) or (dr_kubeconfig is not defined)
+
+    - name: Check production cluster access
+      ansible.builtin.command: >-
+        oc --kubeconfig {{ prod_kubeconfig }} get infrastructure/cluster -o jsonpath='{.status.infrastructureName}'
+      register: _prod_cluster_check
+      changed_when: false
+      failed_when: false
+
+    - name: Check DR cluster access
+      ansible.builtin.command: >-
+        oc --kubeconfig {{ dr_kubeconfig }} get infrastructure/cluster -o jsonpath='{.status.infrastructureName}'
+      register: _dr_cluster_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display cluster access results
+      ansible.builtin.debug:
+        msg:
+          - "{{ '✓' if _prod_cluster_check.rc == 0 else '✗' }} Production cluster: {{ _prod_cluster_check.stdout | default('UNREACHABLE') }}"
+          - "{{ '✓' if _dr_cluster_check.rc == 0 else '✗' }} DR cluster: {{ _dr_cluster_check.stdout | default('UNREACHABLE') }}"
+
+    - name: Fail if clusters are unreachable
+      ansible.builtin.fail:
+        msg: >-
+          Cannot reach one or both clusters.
+          Production: {{ 'OK' if _prod_cluster_check.rc == 0 else 'FAILED - ' ~ _prod_cluster_check.stderr | default('') }}
+          DR: {{ 'OK' if _dr_cluster_check.rc == 0 else 'FAILED - ' ~ _dr_cluster_check.stderr | default('') }}
+      when: _prod_cluster_check.rc != 0 or _dr_cluster_check.rc != 0
+
+    # =========================================================================
+    # Phase 6: Git Repository Access
+    # =========================================================================
+    - name: "PHASE 6: Verify git repository access"
+      ansible.builtin.debug:
+        msg: "Checking git repository access..."
+
+    - name: Detect git repo URL from working directory
+      ansible.builtin.command: git -C {{ _project_root }} remote get-url origin
+      register: _git_remote
+      changed_when: false
+      failed_when: false
+      when: git_repo_url == ''
+
+    - name: Set effective git URL
+      ansible.builtin.set_fact:
+        _effective_git_url: "{{ git_repo_url if git_repo_url != '' else (_git_remote.stdout | default('') | trim) }}"
+
+    - name: Test git push access (dry-run)
+      ansible.builtin.command: git -C {{ _project_root }} push --dry-run origin HEAD
+      register: _git_push_check
+      changed_when: false
+      failed_when: false
+      when: _effective_git_url != ''
+
+    - name: Display git access results
+      ansible.builtin.debug:
+        msg:
+          - "{{ '✓' if _git_push_check.rc | default(1) == 0 else '✗' }} Git push access to: {{ _effective_git_url }}"
+          - "{{ '  Error: ' ~ _git_push_check.stderr | default('') if _git_push_check.rc | default(1) != 0 else '' }}"
+
+    # =========================================================================
+    # Phase 7: FSx Admin Password
+    # =========================================================================
+    - name: "PHASE 7: Verify FSx admin password"
+      ansible.builtin.debug:
+        msg: "Checking FSx admin password availability..."
+
+    - name: Check fsx_admin_password variable
+      ansible.builtin.set_fact:
+        _fsx_pw_from_var: "{{ fsx_admin_password is defined and fsx_admin_password != '' }}"
+
+    - name: Check ~/.fsx file
+      ansible.builtin.stat:
+        path: "{{ '~/.fsx' | expanduser }}"
+      register: _fsx_file
+
+    - name: Check FSX_ADMIN_PASSWORD environment variable
+      ansible.builtin.set_fact:
+        _fsx_pw_from_env: "{{ lookup('env', 'FSX_ADMIN_PASSWORD') | default('', true) != '' }}"
+
+    - name: Display FSx password results
+      ansible.builtin.debug:
+        msg:
+          - "{{ '✓' if _fsx_pw_from_var | bool else '✗' }} fsx_admin_password variable"
+          - "{{ '✓' if _fsx_file.stat.exists | default(false) else '✗' }} ~/.fsx file"
+          - "{{ '✓' if _fsx_pw_from_env | bool else '✗' }} FSX_ADMIN_PASSWORD env var"
+
+    - name: Warn if no FSx password source found
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: No FSx admin password found. Provide one via:
+            1. -e fsx_admin_password=<password>
+            2. echo "password" > ~/.fsx && chmod 600 ~/.fsx
+            3. export FSX_ADMIN_PASSWORD=<password>
+      when: not (_fsx_pw_from_var | bool) and not (_fsx_file.stat.exists | default(false)) and not (_fsx_pw_from_env | bool)
+
+    # =========================================================================
+    # Phase 8: Terraform State Backend
+    # =========================================================================
+    - name: "PHASE 8: Check Terraform state backend"
+      ansible.builtin.debug:
+        msg: "Checking Terraform state backend..."
+
+    - name: Load values-trident.yaml
+      ansible.builtin.set_fact:
+        _values_trident: "{{ lookup('file', _project_root ~ '/values-trident.yaml') | from_yaml }}"
+
+    - name: Check if state bucket exists
+      ansible.builtin.command: >-
+        aws s3api head-bucket --bucket {{ _values_trident.terraform.state.bucket }}
+      register: _state_bucket_check
+      changed_when: false
+      failed_when: false
+
+    - name: Check if DynamoDB lock table exists
+      ansible.builtin.command: >-
+        aws dynamodb describe-table --table-name terraform-state-lock --output json
+      register: _state_dynamodb_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display state backend results
+      ansible.builtin.debug:
+        msg:
+          - "{{ '✓' if _state_bucket_check.rc == 0 else '○' }} S3 bucket: {{ _values_trident.terraform.state.bucket }} {{ '(exists)' if _state_bucket_check.rc == 0 else '(will be created)' }}"
+          - "{{ '✓' if _state_dynamodb_check.rc == 0 else '○' }} DynamoDB table: terraform-state-lock {{ '(exists)' if _state_dynamodb_check.rc == 0 else '(will be created)' }}"
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+    - name: Display verification summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "  Prerequisites Verification Complete"
+          - "============================================================"
+          - ""
+          - "  CLI Tools:        ALL PRESENT"
+          - "  AWS Credentials:  {{ _aws_arn }}"
+          - "  AWS Account:      {{ _aws_account }}"
+          - "  Prod Cluster:     {{ _prod_cluster_check.stdout }}"
+          - "  DR Cluster:       {{ _dr_cluster_check.stdout }}"
+          - "  Git Repo:         {{ _effective_git_url }}"
+          - "  Git Push:         {{ 'OK' if _git_push_check.rc | default(1) == 0 else 'FAILED (may need credentials)' }}"
+          - "  FSx Password:     {{ 'Available' if (_fsx_pw_from_var | bool) or (_fsx_file.stat.exists | default(false)) or (_fsx_pw_from_env | bool) else 'MISSING' }}"
+          - "  State Bucket:     {{ _values_trident.terraform.state.bucket }} {{ '(exists)' if _state_bucket_check.rc == 0 else '(new)' }}"
+          - ""
+          - "  {{ 'Ready to proceed with DR infrastructure setup.' if (_git_push_check.rc | default(1) == 0) and ((_fsx_pw_from_var | bool) or (_fsx_file.stat.exists | default(false)) or (_fsx_pw_from_env | bool)) else 'Some issues need to be resolved before proceeding.' }}"
+          - "============================================================"

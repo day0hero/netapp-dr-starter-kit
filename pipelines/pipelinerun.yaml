@@ -1,0 +1,60 @@
+---
+# =============================================================================
+# Example PipelineRun - DR Infrastructure Provisioning
+# =============================================================================
+#
+# Before running, ensure all secrets are created in the dr-pipelines namespace:
+#
+#   oc create secret generic aws-credentials -n dr-pipelines \
+#     --from-literal=AWS_ACCESS_KEY_ID=<key> \
+#     --from-literal=AWS_SECRET_ACCESS_KEY=<secret>
+#
+#   oc create secret generic fsx-admin-password -n dr-pipelines \
+#     --from-literal=password=<fsx-password>
+#
+#   oc create secret generic git-credentials -n dr-pipelines \
+#     --from-literal=username=<github-user> \
+#     --from-literal=password=<github-pat>
+#
+#   oc create secret generic prod-kubeconfig -n dr-pipelines \
+#     --from-file=kubeconfig=$HOME/clusters/hub/auth/kubeconfig
+#
+#   oc create secret generic dr-kubeconfig -n dr-pipelines \
+#     --from-file=kubeconfig=$HOME/clusters/secondary/auth/kubeconfig
+#
+# Then apply this file:
+#   oc create -f pipelines/pipelinerun.yaml
+#
+# =============================================================================
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: provision-dr-infra-
+  namespace: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit
+spec:
+  pipelineRef:
+    name: provision-dr-infrastructure
+  params:
+    - name: git-url
+      value: "https://github.com/day0hero/netapp-dr-starter-kit.git"
+    - name: git-revision
+      value: "main"
+    - name: commit-message
+      value: "chore: update tridentFSX values from pipeline provisioning"
+  taskRunTemplate:
+    serviceAccountName: dr-pipeline
+  timeouts:
+    pipeline: "2h"
+    tasks: "1h30m"
+  workspaces:
+    - name: shared-workspace
+      persistentVolumeClaim:
+        claimName: dr-pipeline-workspace
+    - name: prod-kubeconfig
+      secret:
+        secretName: prod-kubeconfig
+    - name: dr-kubeconfig
+      secret:
+        secretName: dr-kubeconfig

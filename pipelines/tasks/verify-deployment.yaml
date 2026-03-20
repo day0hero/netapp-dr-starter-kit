@@ -1,0 +1,109 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: verify-deployment
+  namespace: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit
+spec:
+  description: >-
+    Waits for ArgoCD to sync the updated values and verifies that
+    Trident backends and AppVaults are healthy on both clusters.
+  params:
+    - name: image
+      type: string
+      default: quay.io/day0hero/dr-pipeline-tools:latest
+    - name: sync-timeout
+      type: string
+      description: Max time to wait for ArgoCD sync (seconds)
+      default: "600"
+  workspaces:
+    - name: prod-kubeconfig
+      description: Workspace containing the production kubeconfig
+    - name: dr-kubeconfig
+      description: Workspace containing the DR kubeconfig
+  steps:
+    - name: wait-and-verify
+      image: $(params.image)
+      timeout: 20m
+      env:
+        - name: PROD_KUBECONFIG
+          value: $(workspaces.prod-kubeconfig.path)/kubeconfig
+        - name: DR_KUBECONFIG
+          value: $(workspaces.dr-kubeconfig.path)/kubeconfig
+        - name: SYNC_TIMEOUT
+          value: $(params.sync-timeout)
+      script: |
+        #!/bin/bash
+        set -uo pipefail
+
+        check_cluster() {
+          local LABEL="$1"
+          local KC="$2"
+          local ERRORS=0
+
+          echo ""
+          echo "=== ${LABEL} Cluster ==="
+
+          echo "--- TridentBackendConfig ---"
+          if oc --kubeconfig "${KC}" get tridentbackendconfig -n trident 2>/dev/null; then
+            echo "  ✓ TridentBackendConfig found"
+          else
+            echo "  ○ TridentBackendConfig not yet available"
+          fi
+
+          echo "--- AppVault ---"
+          VAULT_STATUS=$(oc --kubeconfig "${KC}" get appvaults -n trident-protect -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.state}{"\n"}{end}' 2>/dev/null || echo "")
+          if [ -n "${VAULT_STATUS}" ]; then
+            echo "${VAULT_STATUS}" | while read -r NAME STATE; do
+              if [ "${STATE}" = "Available" ] || [ "${STATE}" = "available" ]; then
+                echo "  ✓ AppVault ${NAME}: ${STATE}"
+              else
+                echo "  ○ AppVault ${NAME}: ${STATE:-pending}"
+              fi
+            done
+          else
+            echo "  ○ No AppVaults found yet"
+          fi
+
+          echo "--- Trident Protect Applications ---"
+          oc --kubeconfig "${KC}" get applications.protect.trident.netapp.io -A --no-headers 2>/dev/null || echo "  ○ No applications found yet"
+
+          echo "--- AppMirrorRelationships ---"
+          oc --kubeconfig "${KC}" get appmirrorrelationships -A --no-headers 2>/dev/null || echo "  ○ No AMRs found (expected on hub)"
+
+          return ${ERRORS}
+        }
+
+        echo "============================================================"
+        echo "  Post-Deployment Verification"
+        echo "============================================================"
+        echo ""
+        echo "Waiting up to ${SYNC_TIMEOUT}s for ArgoCD to reconcile..."
+
+        ELAPSED=0
+        INTERVAL=30
+        while [ ${ELAPSED} -lt ${SYNC_TIMEOUT} ]; do
+          PROD_TBC=$(oc --kubeconfig "${PROD_KUBECONFIG}" get tridentbackendconfig -n trident --no-headers 2>/dev/null | wc -l)
+          DR_TBC=$(oc --kubeconfig "${DR_KUBECONFIG}" get tridentbackendconfig -n trident --no-headers 2>/dev/null | wc -l)
+
+          if [ "${PROD_TBC}" -gt 0 ] && [ "${DR_TBC}" -gt 0 ]; then
+            echo "TridentBackendConfigs detected on both clusters (${ELAPSED}s elapsed)"
+            break
+          fi
+
+          echo "  Waiting... (${ELAPSED}s / ${SYNC_TIMEOUT}s) prod_tbc=${PROD_TBC} dr_tbc=${DR_TBC}"
+          sleep ${INTERVAL}
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+
+        check_cluster "Production" "${PROD_KUBECONFIG}"
+        check_cluster "DR" "${DR_KUBECONFIG}"
+
+        echo ""
+        echo "============================================================"
+        echo "  Verification complete."
+        echo "  If resources are still pending, ArgoCD will continue"
+        echo "  reconciling. Check the ArgoCD dashboard for details."
+        echo "============================================================"

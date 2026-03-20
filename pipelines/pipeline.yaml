@@ -1,0 +1,119 @@
+---
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: provision-dr-infrastructure
+  namespace: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit
+spec:
+  description: >-
+    End-to-end DR infrastructure provisioning pipeline.
+    Creates FSx ONTAP filesystems, peers VPCs, updates GitOps values,
+    and verifies the deployment.
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL for the pattern
+    - name: git-revision
+      type: string
+      description: Git branch to use
+      default: main
+    - name: pipeline-image
+      type: string
+      description: Container image with ansible, terraform, oc, aws cli
+      default: quay.io/day0hero/dr-pipeline-tools:latest
+    - name: commit-message
+      type: string
+      default: "chore: update tridentFSX values from pipeline provisioning"
+    - name: skip-verify
+      type: string
+      description: Set to "true" to skip prerequisites verification
+      default: "false"
+
+  workspaces:
+    - name: shared-workspace
+      description: PVC shared across all tasks for the git repo
+    - name: prod-kubeconfig
+      description: Secret containing production cluster kubeconfig
+    - name: dr-kubeconfig
+      description: Secret containing DR cluster kubeconfig
+
+  tasks:
+    # -----------------------------------------------------------------
+    # Step 1: Verify prerequisites
+    # -----------------------------------------------------------------
+    - name: verify-prerequisites
+      when:
+        - input: $(params.skip-verify)
+          operator: notin
+          values: ["true", "yes", "1"]
+      taskRef:
+        name: verify-prerequisites
+      params:
+        - name: git-url
+          value: $(params.git-url)
+        - name: git-revision
+          value: $(params.git-revision)
+        - name: image
+          value: $(params.pipeline-image)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: prod-kubeconfig
+          workspace: prod-kubeconfig
+        - name: dr-kubeconfig
+          workspace: dr-kubeconfig
+
+    # -----------------------------------------------------------------
+    # Step 2: Provision FSx ONTAP + VPC peering
+    # -----------------------------------------------------------------
+    - name: provision-dr-infra
+      runAfter:
+        - verify-prerequisites
+      taskRef:
+        name: provision-dr-infra
+      params:
+        - name: image
+          value: $(params.pipeline-image)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: prod-kubeconfig
+          workspace: prod-kubeconfig
+        - name: dr-kubeconfig
+          workspace: dr-kubeconfig
+
+    # -----------------------------------------------------------------
+    # Step 3: Commit and push updated values files
+    # -----------------------------------------------------------------
+    - name: git-commit-push
+      runAfter:
+        - provision-dr-infra
+      taskRef:
+        name: git-commit-push
+      params:
+        - name: git-revision
+          value: $(params.git-revision)
+        - name: commit-message
+          value: $(params.commit-message)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+
+    # -----------------------------------------------------------------
+    # Step 4: Verify deployment health
+    # -----------------------------------------------------------------
+    - name: verify-deployment
+      runAfter:
+        - git-commit-push
+      taskRef:
+        name: verify-deployment
+      params:
+        - name: image
+          value: $(params.pipeline-image)
+      workspaces:
+        - name: prod-kubeconfig
+          workspace: prod-kubeconfig
+        - name: dr-kubeconfig
+          workspace: dr-kubeconfig

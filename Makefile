@@ -209,3 +209,119 @@ destroy-terraform-state: ## Destroy the Terraform state backend (S3 bucket + Dyn
 	@echo "=========================================="
 	@echo "  Terraform State Backend Destroyed"
 	@echo "=========================================="
+
+# =============================================================================
+# Pipeline Targets
+# =============================================================================
+
+PIPELINE_NS ?= dr-pipelines
+PIPELINE_IMAGE ?= quay.io/day0hero/dr-pipeline-tools:latest
+GIT_URL ?= $(shell git remote get-url origin 2>/dev/null)
+GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+
+##@ Pipeline
+
+.PHONY: verify-prerequisites
+verify-prerequisites: ## Run the prerequisites verification playbook locally
+	$(call _validate_kubeconfigs,verify-prerequisites)
+	ansible-playbook ansible/verify-prerequisites.yaml \
+		-e prod_kubeconfig=$(_PROD_KUBECONFIG) \
+		-e dr_kubeconfig=$(_DR_KUBECONFIG)
+
+.PHONY: pipeline-setup
+pipeline-setup: ## Create pipeline namespace, RBAC, PVC, and apply task/pipeline definitions
+	@echo "=========================================="
+	@echo "Setting up DR Pipeline"
+	@echo "  Namespace: $(PIPELINE_NS)"
+	@echo "=========================================="
+	oc apply -f pipelines/base/namespace.yaml
+	oc apply -f pipelines/base/serviceaccount.yaml
+	oc apply -f pipelines/base/pvc.yaml
+	oc apply -f pipelines/tasks/
+	oc apply -f pipelines/pipeline.yaml
+	@echo ""
+	@echo "Pipeline resources created. Now create secrets:"
+	@echo "  oc create secret generic aws-credentials -n $(PIPELINE_NS) \\"
+	@echo "    --from-literal=AWS_ACCESS_KEY_ID=<key> \\"
+	@echo "    --from-literal=AWS_SECRET_ACCESS_KEY=<secret>"
+	@echo ""
+	@echo "  oc create secret generic fsx-admin-password -n $(PIPELINE_NS) \\"
+	@echo "    --from-literal=password=<fsx-password>"
+	@echo ""
+	@echo "  oc create secret generic git-credentials -n $(PIPELINE_NS) \\"
+	@echo "    --from-literal=username=<github-user> \\"
+	@echo "    --from-literal=password=<github-pat>"
+	@echo ""
+	@echo "  oc create secret generic prod-kubeconfig -n $(PIPELINE_NS) \\"
+	@echo "    --from-file=kubeconfig=<path-to-prod-kubeconfig>"
+	@echo ""
+	@echo "  oc create secret generic dr-kubeconfig -n $(PIPELINE_NS) \\"
+	@echo "    --from-file=kubeconfig=<path-to-dr-kubeconfig>"
+
+.PHONY: pipeline-secrets
+pipeline-secrets: ## Create pipeline secrets from local files (interactive)
+	$(call _validate_kubeconfigs,pipeline-secrets)
+	@echo "Creating pipeline secrets in $(PIPELINE_NS)..."
+	@oc create secret generic aws-credentials -n $(PIPELINE_NS) \
+		--from-literal=AWS_ACCESS_KEY_ID=$$(aws configure get aws_access_key_id) \
+		--from-literal=AWS_SECRET_ACCESS_KEY=$$(aws configure get aws_secret_access_key) \
+		--dry-run=client -o yaml | oc apply -f -
+	@if [ -f "$$HOME/.fsx" ]; then \
+		oc create secret generic fsx-admin-password -n $(PIPELINE_NS) \
+			--from-literal=password=$$(cat $$HOME/.fsx) \
+			--dry-run=client -o yaml | oc apply -f -; \
+	else \
+		echo "WARNING: ~/.fsx not found - create fsx-admin-password secret manually"; \
+	fi
+	@oc create secret generic prod-kubeconfig -n $(PIPELINE_NS) \
+		--from-file=kubeconfig=$(_PROD_KUBECONFIG) \
+		--dry-run=client -o yaml | oc apply -f -
+	@oc create secret generic dr-kubeconfig -n $(PIPELINE_NS) \
+		--from-file=kubeconfig=$(_DR_KUBECONFIG) \
+		--dry-run=client -o yaml | oc apply -f -
+	@echo "Secrets created. Git credentials must be created manually:"
+	@echo "  oc create secret generic git-credentials -n $(PIPELINE_NS) \\"
+	@echo "    --from-literal=username=<github-user> \\"
+	@echo "    --from-literal=password=<github-pat>"
+
+.PHONY: pipeline-run
+pipeline-run: ## Trigger a pipeline run
+	@echo "Starting DR infrastructure pipeline..."
+	oc create -f - <<EOF
+	apiVersion: tekton.dev/v1
+	kind: PipelineRun
+	metadata:
+	  generateName: provision-dr-infra-
+	  namespace: $(PIPELINE_NS)
+	spec:
+	  pipelineRef:
+	    name: provision-dr-infrastructure
+	  params:
+	    - name: git-url
+	      value: "$(GIT_URL)"
+	    - name: git-revision
+	      value: "$(GIT_BRANCH)"
+	  taskRunTemplate:
+	    serviceAccountName: dr-pipeline
+	  timeouts:
+	    pipeline: "2h"
+	    tasks: "1h30m"
+	  workspaces:
+	    - name: shared-workspace
+	      persistentVolumeClaim:
+	        claimName: dr-pipeline-workspace
+	    - name: prod-kubeconfig
+	      secret:
+	        secretName: prod-kubeconfig
+	    - name: dr-kubeconfig
+	      secret:
+	        secretName: dr-kubeconfig
+	EOF
+
+.PHONY: pipeline-image-build
+pipeline-image-build: ## Build the pipeline tools container image
+	podman build -t $(PIPELINE_IMAGE) -f pipelines/Containerfile pipelines/
+
+.PHONY: pipeline-image-push
+pipeline-image-push: pipeline-image-build ## Build and push the pipeline tools container image
+	podman push $(PIPELINE_IMAGE)

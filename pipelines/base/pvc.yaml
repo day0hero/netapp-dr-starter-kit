@@ -1,0 +1,14 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dr-pipeline-workspace
+  namespace: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

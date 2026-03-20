@@ -1,0 +1,83 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: verify-prerequisites
+  namespace: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit
+spec:
+  description: >-
+    Validates AWS credentials, IAM permissions, cluster access,
+    git push access, and FSx password before provisioning.
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+    - name: git-revision
+      type: string
+      description: Git branch or revision
+      default: main
+    - name: image
+      type: string
+      default: quay.io/day0hero/dr-pipeline-tools:latest
+  workspaces:
+    - name: source
+      description: Workspace with the checked-out git repo
+    - name: prod-kubeconfig
+      description: Workspace containing the production kubeconfig
+    - name: dr-kubeconfig
+      description: Workspace containing the DR kubeconfig
+  steps:
+    - name: clone
+      image: alpine/git:latest
+      script: |
+        #!/bin/sh
+        set -eu
+        if [ -d "$(workspaces.source.path)/.git" ]; then
+          echo "Repo already cloned, pulling latest..."
+          cd "$(workspaces.source.path)"
+          git fetch origin
+          git checkout "$(params.git-revision)" || git checkout -b "$(params.git-revision)" "origin/$(params.git-revision)"
+          git pull origin "$(params.git-revision)" || true
+        else
+          git clone --branch "$(params.git-revision)" --single-branch \
+            "$(params.git-url)" "$(workspaces.source.path)"
+        fi
+    - name: verify
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: AWS_SECRET_ACCESS_KEY
+        - name: FSX_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: fsx-admin-password
+              key: password
+        - name: PROD_KUBECONFIG
+          value: $(workspaces.prod-kubeconfig.path)/kubeconfig
+        - name: DR_KUBECONFIG
+          value: $(workspaces.dr-kubeconfig.path)/kubeconfig
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        mkdir -p ~/.fsx_tmp
+        echo "${FSX_ADMIN_PASSWORD}" > ~/.fsx
+        chmod 600 ~/.fsx
+
+        ansible-playbook ansible/verify-prerequisites.yaml \
+          -e prod_kubeconfig="${PROD_KUBECONFIG}" \
+          -e dr_kubeconfig="${DR_KUBECONFIG}" \
+          -e fsx_admin_password="${FSX_ADMIN_PASSWORD}" \
+          -e git_repo_url="$(params.git-url)" \
+          -e git_branch="$(params.git-revision)"

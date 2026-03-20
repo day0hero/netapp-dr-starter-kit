@@ -1,0 +1,79 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: provision-dr-infra
+  namespace: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit
+spec:
+  description: >-
+    Runs the dr-setup.yaml Ansible playbook to create VPC peering,
+    FSx ONTAP filesystems, and update values files with the resulting IPs.
+  params:
+    - name: image
+      type: string
+      default: quay.io/day0hero/dr-pipeline-tools:latest
+  workspaces:
+    - name: source
+      description: Workspace with the checked-out git repo
+    - name: prod-kubeconfig
+      description: Workspace containing the production kubeconfig
+    - name: dr-kubeconfig
+      description: Workspace containing the DR kubeconfig
+  steps:
+    - name: install-ansible-collections
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        if [ -f ansible/ansible-requirements.yml ]; then
+          ansible-galaxy collection install -r ansible/ansible-requirements.yml --force
+        fi
+    - name: provision
+      image: $(params.image)
+      workingDir: $(workspaces.source.path)
+      timeout: 1h30m
+      env:
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: AWS_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: AWS_SECRET_ACCESS_KEY
+        - name: FSX_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: fsx-admin-password
+              key: password
+        - name: PROD_KUBECONFIG
+          value: $(workspaces.prod-kubeconfig.path)/kubeconfig
+        - name: DR_KUBECONFIG
+          value: $(workspaces.dr-kubeconfig.path)/kubeconfig
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        echo "${FSX_ADMIN_PASSWORD}" > ~/.fsx
+        chmod 600 ~/.fsx
+
+        ansible-playbook ansible/dr-setup.yaml \
+          -e @ansible/dr-vars.yml \
+          -e prod_kubeconfig="${PROD_KUBECONFIG}" \
+          -e dr_kubeconfig="${DR_KUBECONFIG}" \
+          -e fsx_admin_password="${FSX_ADMIN_PASSWORD}" \
+          -v
+    - name: show-diff
+      image: alpine/git:latest
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        echo "=== Values file changes ==="
+        git diff --stat
+        echo ""
+        git diff values-hub.yaml values-secondary.yaml || true

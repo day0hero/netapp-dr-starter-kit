@@ -1,0 +1,76 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: git-commit-push
+  namespace: dr-pipelines
+  labels:
+    app.kubernetes.io/part-of: netapp-dr-starter-kit
+spec:
+  description: >-
+    Commits updated values files and pushes to the git remote.
+    This triggers ArgoCD to pick up the new FSx configuration.
+  params:
+    - name: git-revision
+      type: string
+      description: Branch to push to
+      default: main
+    - name: commit-message
+      type: string
+      description: Commit message
+      default: "chore: update tridentFSX values from pipeline provisioning"
+    - name: git-user-name
+      type: string
+      default: "DR Pipeline"
+    - name: git-user-email
+      type: string
+      default: "dr-pipeline@netapp-dr-starter-kit.local"
+  workspaces:
+    - name: source
+      description: Workspace with the modified git repo
+  steps:
+    - name: commit-and-push
+      image: alpine/git:latest
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: GIT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: git-credentials
+              key: username
+              optional: true
+        - name: GIT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: git-credentials
+              key: password
+              optional: true
+      script: |
+        #!/bin/sh
+        set -eu
+
+        git config user.name "$(params.git-user-name)"
+        git config user.email "$(params.git-user-email)"
+
+        if [ -n "${GIT_USERNAME:-}" ] && [ -n "${GIT_PASSWORD:-}" ]; then
+          REMOTE_URL=$(git remote get-url origin)
+          if echo "${REMOTE_URL}" | grep -q "^https://"; then
+            CLEAN_URL=$(echo "${REMOTE_URL}" | sed 's|https://[^@]*@|https://|' | sed 's|https://|https://'"${GIT_USERNAME}:${GIT_PASSWORD}"'@|')
+            git remote set-url origin "${CLEAN_URL}"
+          fi
+        fi
+
+        if git diff --quiet values-hub.yaml values-secondary.yaml 2>/dev/null; then
+          echo "No changes to values files — nothing to commit."
+          exit 0
+        fi
+
+        echo "=== Committing changes ==="
+        git add values-hub.yaml values-secondary.yaml
+        git commit -m "$(params.commit-message)"
+
+        echo "=== Pushing to origin/$(params.git-revision) ==="
+        git push origin HEAD:"$(params.git-revision)"
+
+        echo "=== Push complete ==="
+        git log --oneline -1
