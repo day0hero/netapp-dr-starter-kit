@@ -23,9 +23,9 @@ spec:
               has been in a non-Established state for more than {{ .Values.drMonitoring.alerts.amrEstablishingThreshold }}.
               Current state: {{`{{ $labels.current_state_value }}`}}.
           expr: |
-            trident_amr_current_state{current_state_value="Established"} == 0
+            kube_customresource_trident_amr_current_state{current_state_value="Established"} == 0
             and
-            trident_amr_desired_state{desired_state_value="Established"} == 1
+            kube_customresource_trident_amr_desired_state{desired_state_value="Established"} == 1
           for: {{ .Values.drMonitoring.alerts.amrEstablishingThreshold }}
           labels:
             severity: warning
@@ -39,7 +39,7 @@ spec:
               AppMirrorRelationship {{`{{ $labels.name }}`}} in namespace {{`{{ $labels.namespace }}`}}
               has entered Failed state. Immediate attention required.
           expr: |
-            trident_amr_current_state{current_state_value="Failed"} == 1
+            kube_customresource_trident_amr_current_state{current_state_value="Failed"} == 1
           for: 5m
           labels:
             severity: critical
@@ -54,15 +54,15 @@ spec:
               for over 1 hour. The relationship may be stuck.
           expr: |
             (
-              trident_amr_desired_state{desired_state_value="Established"} == 1
+              kube_customresource_trident_amr_desired_state{desired_state_value="Established"} == 1
               unless
-              trident_amr_current_state{current_state_value="Established"} == 1
+              kube_customresource_trident_amr_current_state{current_state_value="Established"} == 1
             )
             or
             (
-              trident_amr_desired_state{desired_state_value="Promoted"} == 1
+              kube_customresource_trident_amr_desired_state{desired_state_value="Promoted"} == 1
               unless
-              trident_amr_current_state{current_state_value="Promoted"} == 1
+              kube_customresource_trident_amr_current_state{current_state_value="Promoted"} == 1
             )
           for: 1h
           labels:
@@ -80,7 +80,7 @@ spec:
               TridentMirrorRelationship {{`{{ $labels.name }}`}} in namespace {{`{{ $labels.namespace }}`}}
               is in failed state. The underlying SnapMirror relationship may need manual intervention.
           expr: |
-            trident_tmr_state{mirror_state="failed"} == 1
+            kube_customresource_trident_tmr_state{mirror_state="failed"} == 1
           for: 5m
           labels:
             severity: critical
@@ -94,9 +94,9 @@ spec:
               TridentMirrorRelationship {{`{{ $labels.name }}`}} has not reached established state
               for over 45 minutes. The SnapMirror baseline transfer may be stalled.
           expr: |
-            trident_tmr_state{mirror_state="established"} == 0
+            kube_customresource_trident_tmr_state{mirror_state="established"} == 0
             and
-            trident_tmr_info{desired_state="established"} == 1
+            kube_customresource_trident_tmr_info{desired_state="established"} == 1
           for: 45m
           labels:
             severity: warning
@@ -113,7 +113,7 @@ spec:
               AppVault {{`{{ $labels.name }}`}} is not in Available state.
               Snapshots and backups cannot be stored.
           expr: |
-            trident_appvault_state{vault_state="Available"} == 0
+            kube_customresource_trident_appvault_state{vault_state="Available"} == 0
           for: 10m
           labels:
             severity: critical
@@ -130,7 +130,7 @@ spec:
               An AppMirrorUpdate in namespace {{`{{ $labels.namespace }}`}} has failed.
               This may block the AMR from becoming Established.
           expr: |
-            trident_amu_state{amu_state="Failed"} == 1
+            kube_customresource_trident_amu_state{amu_state="Failed"} == 1
           for: 5m
           labels:
             severity: warning
@@ -144,7 +144,7 @@ spec:
               An AppMirrorUpdate has been in Running state for over {{ .Values.drMonitoring.alerts.transferStaleThreshold }}.
               The data transfer may be stalled.
           expr: |
-            trident_amu_state{amu_state="Running"} == 1
+            kube_customresource_trident_amu_state{amu_state="Running"} == 1
           for: {{ .Values.drMonitoring.alerts.transferStaleThreshold }}
           labels:
             severity: warning
@@ -161,9 +161,9 @@ spec:
               No snapshots in Completed state found for namespace {{`{{ $labels.namespace }}`}}.
               The schedule may be disabled or failing.
           expr: |
-            count by (namespace) (trident_snapshot_state{snapshot_state="Completed"} == 1) < 1
+            count by (namespace) (kube_customresource_trident_snapshot_state{snapshot_state="Completed"} == 1) < 1
             or
-            absent(trident_snapshot_state{snapshot_state="Completed"} == 1)
+            absent(kube_customresource_trident_snapshot_state{snapshot_state="Completed"} == 1)
           for: {{ .Values.drMonitoring.alerts.snapshotOverdueThreshold }}
           labels:
             severity: warning

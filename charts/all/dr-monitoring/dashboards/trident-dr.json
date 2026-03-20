@@ -21,7 +21,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "min(trident_appvault_state{vault_state=\"Available\"})",
+              "expr": "min(kube_customresource_trident_appvault_state{vault_state=\"Available\"})",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -46,7 +46,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "count(trident_amr_current_state{current_state_value=\"Established\"} == 1) or vector(0)",
+              "expr": "count(kube_customresource_trident_amr_current_state{current_state_value=\"Established\"} == 1) or vector(0)",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -67,7 +67,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "count(trident_amr_current_state{current_state_value=\"Established\"} == 0 and trident_amr_desired_state{desired_state_value=\"Established\"} == 1) or vector(0)",
+              "expr": "count(kube_customresource_trident_amr_current_state{current_state_value=\"Established\"} == 0 and kube_customresource_trident_amr_desired_state{desired_state_value=\"Established\"} == 1) or vector(0)",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -145,7 +145,7 @@
           "steppedLine": true,
           "targets": [
             {
-              "expr": "trident_amr_current_state{current_state_value=\"Established\"}",
+              "expr": "kube_customresource_trident_amr_current_state{current_state_value=\"Established\"}",
               "format": "time_series",
               "legendFormat": "{{ namespace }}/{{ name }}",
               "refId": "A"
@@ -193,7 +193,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "trident_amr_current_state{name=\"boutique-mirror\", current_state_value=\"Established\"}",
+              "expr": "kube_customresource_trident_amr_current_state{name=\"boutique-mirror\", current_state_value=\"Established\"}",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -218,7 +218,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "trident_amr_current_state{name=\"wordpress-mirror\", current_state_value=\"Established\"}",
+              "expr": "kube_customresource_trident_amr_current_state{name=\"wordpress-mirror\", current_state_value=\"Established\"}",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -279,7 +279,7 @@
           "steppedLine": true,
           "targets": [
             {
-              "expr": "trident_tmr_state{mirror_state=\"established\"}",
+              "expr": "kube_customresource_trident_tmr_state{mirror_state=\"established\"}",
               "format": "time_series",
               "legendFormat": "{{ namespace }}/{{ name }}",
               "refId": "A"
@@ -327,7 +327,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "count(trident_snapshot_state{snapshot_state=\"Completed\"} == 1) or vector(0)",
+              "expr": "count(kube_customresource_trident_snapshot_state{snapshot_state=\"Completed\"} == 1) or vector(0)",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -373,7 +373,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "count by (namespace) (trident_snapshot_state{snapshot_state=\"Completed\"} == 1)",
+              "expr": "count by (namespace) (kube_customresource_trident_snapshot_state{snapshot_state=\"Completed\"} == 1)",
               "format": "time_series",
               "legendFormat": "{{ namespace }}",
               "refId": "A"
@@ -421,7 +421,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "trident_appvault_state{vault_state=\"Available\"}",
+              "expr": "kube_customresource_trident_appvault_state{vault_state=\"Available\"}",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -446,7 +446,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "count(trident_amu_state{amu_state=\"Running\"} == 1) or vector(0)",
+              "expr": "count(kube_customresource_trident_amu_state{amu_state=\"Running\"} == 1) or vector(0)",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -467,7 +467,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "count(trident_amu_state{amu_state=\"Failed\"} == 1) or vector(0)",
+              "expr": "count(kube_customresource_trident_amu_state{amu_state=\"Failed\"} == 1) or vector(0)",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -488,7 +488,7 @@
           "datasource": "$datasource",
           "targets": [
             {
-              "expr": "count(trident_amu_state{amu_state=\"Completed\"} == 1) or vector(0)",
+              "expr": "count(kube_customresource_trident_amu_state{amu_state=\"Completed\"} == 1) or vector(0)",
               "format": "time_series",
               "instant": true,
               "refId": "A"
