@@ -52,7 +52,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "min(trident_appvault_state{vault_state=\"Available\"})",
+          "expr": "min(trident_appvault_state{cluster=~\"$cluster\", vault_state=\"Available\"})",
           "legendFormat": "AppVault",
           "refId": "A"
         }
@@ -83,7 +83,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "count(trident_amr_current_state{current_state_value=\"Established\"} == 1) or vector(0)",
+          "expr": "count(trident_amr_current_state{cluster=~\"$cluster\", current_state_value=\"Established\"} == 1) or vector(0)",
           "legendFormat": "Established",
           "refId": "A"
         }
@@ -114,7 +114,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "count(trident_amr_current_state{current_state_value=\"Established\"} == 0 and trident_amr_desired_state{desired_state_value=\"Established\"} == 1) or vector(0)",
+          "expr": "count(trident_amr_current_state{cluster=~\"$cluster\", current_state_value=\"Established\"} == 0 and trident_amr_desired_state{cluster=~\"$cluster\", desired_state_value=\"Established\"} == 1) or vector(0)",
           "legendFormat": "Not Established",
           "refId": "A"
         }
@@ -145,7 +145,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "count(ALERTS{alertstate=\"firing\", component=\"trident-protect\"}) or vector(0)",
+          "expr": "count(ALERTS{alertstate=\"firing\", component=\"trident-protect\", cluster=~\"$cluster\"}) or vector(0)",
           "legendFormat": "Firing",
           "refId": "A"
         }
@@ -163,102 +163,158 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "fieldConfig": {
         "defaults": {
+          "color": { "mode": "palette-classic" },
           "custom": {
-            "align": "auto",
-            "cellOptions": { "type": "auto" },
-            "inspect": false
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "vis": false },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
           },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "Not Established" }, "1": { "text": "Established" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "min": 0,
+          "max": 1
         },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "State" },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-background",
-                  "mode": "basic"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  { "type": "value", "options": { "Established": { "color": "green", "text": "Established" }, "Establishing": { "color": "yellow", "text": "Establishing" }, "Promoted": { "color": "blue", "text": "Promoted" }, "Failed": { "color": "red", "text": "Failed" } } }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Desired" },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": {
-                  "type": "color-text"
-                }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  { "type": "value", "options": { "Established": { "color": "green" }, "Promoted": { "color": "blue" } } }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 6 },
-      "id": 10,
+      "id": 11,
       "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false, "reducer": ["sum"], "countRows": false },
-        "sortBy": [{ "desc": false, "displayName": "Namespace" }]
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "maxHeight": 600, "mode": "single", "sort": "none" }
       },
-      "title": "AMR Status",
-      "type": "table",
+      "title": "AMR Established State Over Time",
+      "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "trident_amr_info",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "",
+          "expr": "trident_amr_current_state{cluster=~\"$cluster\", current_state_value=\"Established\"}",
+          "legendFormat": "{{ cluster }} / {{ namespace }}/{{ name }}",
           "refId": "A"
         }
-      ],
-      "transformations": [
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "type": "value", "options": { "0": { "color": "red", "text": "Not Established" }, "1": { "color": "green", "text": "Established" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 14 },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name"
+      },
+      "title": "AMR Current State",
+      "type": "stat",
+      "targets": [
         {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "container": true,
-              "endpoint": true,
-              "instance": true,
-              "job": true,
-              "pod": true,
-              "service": true,
-              "uid": true,
-              "prometheus": true,
-              "prometheus_replica": true
-            },
-            "indexByName": {},
-            "renameByName": {
-              "name": "Name",
-              "namespace": "Namespace",
-              "desired_state": "Desired",
-              "state": "State",
-              "source_app": "Source App",
-              "source_app_vault": "Source Vault",
-              "destination_app_vault": "Dest Vault",
-              "storage_class": "Storage Class"
-            }
-          }
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "trident_amr_current_state{cluster=~\"$cluster\", current_state_value=\"Established\"}",
+          "legendFormat": "{{ namespace }}/{{ name }}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "type": "value", "options": { "0": { "color": "orange", "text": "No" }, "1": { "color": "green", "text": "Yes" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 14 },
+      "id": 13,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name"
+      },
+      "title": "AMR Desired = Established",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "trident_amr_desired_state{cluster=~\"$cluster\", desired_state_value=\"Established\"}",
+          "legendFormat": "{{ namespace }}/{{ name }}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "id": 102,
+      "title": "TridentMirrorRelationships",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "type": "value", "options": { "0": { "color": "orange", "text": "Not Established" }, "1": { "color": "green", "text": "Established" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 21 },
+      "id": 20,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name"
+      },
+      "title": "TMR Mirror State",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "trident_tmr_state{cluster=~\"$cluster\", mirror_state=\"established\"}",
+          "legendFormat": "{{ namespace }}/{{ name }}",
+          "refId": "A"
         }
       ]
     },
@@ -297,19 +353,19 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
-      "id": 11,
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 21 },
+      "id": 21,
       "options": {
         "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
         "tooltip": { "maxHeight": 600, "mode": "single", "sort": "none" }
       },
-      "title": "AMR Established State Over Time",
+      "title": "TMR Established Over Time",
       "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "trident_amr_current_state{current_state_value=\"Established\"}",
-          "legendFormat": "{{ namespace }}/{{ name }}",
+          "expr": "trident_tmr_state{cluster=~\"$cluster\", mirror_state=\"established\"}",
+          "legendFormat": "{{ cluster }} / {{ namespace }}/{{ name }}",
           "refId": "A"
         }
       ]
@@ -317,102 +373,7 @@
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
-      "id": 102,
-      "title": "TridentMirrorRelationships",
-      "type": "row"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": { "type": "auto" },
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
-        },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Mirror State" },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": { "type": "color-background", "mode": "basic" }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  { "type": "value", "options": { "established": { "color": "green" }, "establishing": { "color": "yellow" }, "uninitialized": { "color": "orange" }, "failed": { "color": "red" } } }
-                ]
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 23 },
-      "id": 20,
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false, "reducer": ["sum"], "countRows": false },
-        "sortBy": [{ "desc": false, "displayName": "Namespace" }]
-      },
-      "title": "TMR Status",
-      "type": "table",
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "trident_tmr_state * on(name, namespace) group_left(desired_state, local_pvc) trident_tmr_info",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "",
-          "refId": "A"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "filters": [{ "fieldName": "Value", "config": { "id": "equal", "options": { "value": 1 } } }],
-            "match": "any",
-            "type": "include"
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "container": true,
-              "endpoint": true,
-              "instance": true,
-              "job": true,
-              "pod": true,
-              "service": true,
-              "uid": true,
-              "prometheus": true,
-              "prometheus_replica": true
-            },
-            "renameByName": {
-              "name": "Name",
-              "namespace": "Namespace",
-              "desired_state": "Desired",
-              "mirror_state": "Mirror State",
-              "local_pvc": "Local PVC"
-            }
-          }
-        }
-      ]
-    },
-
-    {
-      "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
       "id": 103,
       "title": "Snapshots & Schedules",
       "type": "row"
@@ -421,61 +382,30 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": { "type": "auto" },
-            "inspect": false
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
         },
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 32 },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 28 },
       "id": 30,
       "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false, "reducer": ["sum"], "countRows": false }
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
       },
-      "title": "Schedules",
-      "type": "table",
+      "title": "Completed Snapshots by Namespace",
+      "type": "stat",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "trident_schedule_info",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "",
+          "expr": "count by (namespace) (trident_snapshot_state{cluster=~\"$cluster\", snapshot_state=\"Completed\"} == 1)",
+          "legendFormat": "{{ namespace }}",
           "refId": "A"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "container": true,
-              "endpoint": true,
-              "instance": true,
-              "job": true,
-              "pod": true,
-              "service": true,
-              "uid": true,
-              "prometheus": true,
-              "prometheus_replica": true
-            },
-            "renameByName": {
-              "name": "Schedule",
-              "namespace": "Namespace",
-              "enabled": "Enabled",
-              "granularity": "Granularity",
-              "app_ref": "Application"
-            }
-          }
         }
       ]
     },
@@ -487,13 +417,22 @@
           "custom": {
             "axisBorderShow": false,
             "axisCenteredZero": false,
+            "axisColorMode": "text",
             "axisLabel": "Snapshots",
             "axisPlacement": "auto",
-            "fillOpacity": 80,
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
             "gradientMode": "none",
             "hideFrom": { "legend": false, "tooltip": false, "vis": false },
-            "lineWidth": 1,
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
             "scaleDistribution": { "type": "linear" },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
             "thresholdsStyle": { "mode": "off" }
           },
           "mappings": [],
@@ -501,50 +440,27 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 32 },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 28 },
       "id": 31,
       "options": {
-        "barRadius": 0.1,
-        "barWidth": 0.6,
-        "fullHighlight": false,
-        "groupWidth": 0.7,
         "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "orientation": "auto",
-        "showValue": "auto",
-        "stacking": "none",
-        "tooltip": { "maxHeight": 600, "mode": "single", "sort": "none" },
-        "xTickLabelRotation": 0
+        "tooltip": { "maxHeight": 600, "mode": "single", "sort": "none" }
       },
-      "title": "Snapshots by State",
-      "type": "barchart",
+      "title": "Completed Snapshots Over Time",
+      "type": "timeseries",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "count by (namespace, snapshot_state) (trident_snapshot_state == 1)",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "",
+          "expr": "count by (cluster, namespace) (trident_snapshot_state{cluster=~\"$cluster\", snapshot_state=\"Completed\"} == 1)",
+          "legendFormat": "{{ cluster }} / {{ namespace }}",
           "refId": "A"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": { "Time": true },
-            "renameByName": {
-              "namespace": "Namespace",
-              "snapshot_state": "State",
-              "Value": "Count"
-            }
-          }
         }
       ]
     },
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
       "id": 104,
       "title": "AppVaults",
       "type": "row"
@@ -553,82 +469,39 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": { "type": "auto" },
-            "inspect": false
-          },
-          "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            { "type": "value", "options": { "0": { "color": "red", "text": "Unavailable" }, "1": { "color": "green", "text": "Available" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
         },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "State" },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": { "type": "color-background", "mode": "basic" }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  { "type": "value", "options": { "Available": { "color": "green" }, "Unavailable": { "color": "red" } } }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
-      "gridPos": { "h": 5, "w": 12, "x": 0, "y": 39 },
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 35 },
       "id": 40,
       "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false, "reducer": ["sum"], "countRows": false }
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "name"
       },
-      "title": "AppVault Status",
-      "type": "table",
+      "title": "AppVault Health",
+      "type": "stat",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "trident_appvault_info",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "",
+          "expr": "trident_appvault_state{cluster=~\"$cluster\", vault_state=\"Available\"}",
+          "legendFormat": "{{ namespace }}/{{ name }}",
           "refId": "A"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "container": true,
-              "endpoint": true,
-              "instance": true,
-              "job": true,
-              "pod": true,
-              "service": true,
-              "uid": true,
-              "prometheus": true,
-              "prometheus_replica": true
-            },
-            "renameByName": {
-              "name": "Name",
-              "namespace": "Namespace",
-              "state": "State"
-            }
-          }
         }
       ]
     },
 
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 44 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
       "id": 105,
       "title": "Transfer Activity",
       "type": "row"
@@ -637,85 +510,92 @@
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "align": "auto",
-            "cellOptions": { "type": "auto" },
-            "inspect": false
-          },
+          "color": { "mode": "thresholds" },
           "mappings": [],
-          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }] }
         },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "State" },
-            "properties": [
-              {
-                "id": "custom.cellOptions",
-                "value": { "type": "color-background", "mode": "basic" }
-              },
-              {
-                "id": "mappings",
-                "value": [
-                  { "type": "value", "options": { "Running": { "color": "yellow" }, "Completed": { "color": "green" }, "Failed": { "color": "red" } } }
-                ]
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 45 },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 40 },
       "id": 50,
       "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false, "reducer": ["sum"], "countRows": false },
-        "sortBy": [{ "desc": true, "displayName": "State" }]
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
       },
-      "title": "AppMirrorUpdates (Transfers)",
-      "type": "table",
+      "title": "AMUs Running",
+      "type": "stat",
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "trident_amu_state * on(name, namespace) group_left() trident_amu_info",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "",
+          "expr": "count(trident_amu_state{cluster=~\"$cluster\", amu_state=\"Running\"} == 1) or vector(0)",
+          "legendFormat": "Running",
           "refId": "A"
         }
-      ],
-      "transformations": [
-        {
-          "id": "filterByValue",
-          "options": {
-            "filters": [{ "fieldName": "Value", "config": { "id": "equal", "options": { "value": 1 } } }],
-            "match": "any",
-            "type": "include"
-          }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
         },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 40 },
+      "id": 51,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "AMUs Completed",
+      "type": "stat",
+      "targets": [
         {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "container": true,
-              "endpoint": true,
-              "instance": true,
-              "job": true,
-              "pod": true,
-              "service": true,
-              "uid": true,
-              "prometheus": true,
-              "prometheus_replica": true,
-              "state": true
-            },
-            "renameByName": {
-              "name": "Name",
-              "namespace": "Namespace",
-              "amu_state": "State"
-            }
-          }
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "count(trident_amu_state{cluster=~\"$cluster\", amu_state=\"Completed\"} == 1) or vector(0)",
+          "legendFormat": "Completed",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 40 },
+      "id": 52,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "AMUs Failed",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "count(trident_amu_state{cluster=~\"$cluster\", amu_state=\"Failed\"} == 1) or vector(0)",
+          "legendFormat": "Failed",
+          "refId": "A"
         }
       ]
     }
@@ -738,6 +618,24 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "definition": "label_values(trident_amr_info, cluster)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Cluster",
+        "multi": true,
+        "name": "cluster",
+        "options": [],
+        "query": { "qryType": 1, "query": "label_values(trident_amr_info, cluster)", "refId": "cluster" },
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
@@ -746,5 +644,5 @@
   "timezone": "",
   "title": "Trident Protect - Disaster Recovery",
   "uid": "trident-protect-dr",
-  "version": 1
+  "version": 3
 }

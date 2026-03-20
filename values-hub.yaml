@@ -88,6 +88,7 @@ clusterGroup:
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     open-cluster-management:
+    open-cluster-management-observability:
     vault:
     golang-external-secrets:
     trident:
@@ -187,6 +188,11 @@ clusterGroup:
       namespace: wordpress
       argoProject: workload
       path: charts/all/wordpress
+    acm-observability:
+      name: acm-observability
+      namespace: open-cluster-management-observability
+      argoProject: hub
+      path: charts/hub/acm-observability
     dr-monitoring:
       name: dr-monitoring
       namespace: openshift-monitoring
