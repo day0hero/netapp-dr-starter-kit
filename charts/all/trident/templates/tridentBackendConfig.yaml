@@ -25,6 +25,11 @@ spec:
   defaults:
     {{- toYaml $backend.defaults | nindent 4 }}
 {{- end }}
+{{- if $.Values.tridentFSX.peer }}
+  replication:
+    isReplicationEnabled: true
+    remoteSVMName: {{ $.Values.tridentFSX.peer.svm }}
+{{- end }}
   credentials:
     name: {{ $.Values.tridentFSX.backendSecretName }}
 {{- end }}
