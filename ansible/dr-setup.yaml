@@ -264,7 +264,7 @@
       ansible.builtin.async_status:
         jid: "{{ _prod_fsx_job.ansible_job_id }}"
       register: _prod_fsx_apply
-      until: _prod_fsx_apply.finished
+      until: _prod_fsx_apply.finished | bool
       retries: 120
       delay: 30
       when: not (_prod_fsx_prepared.skipped | default(false))
@@ -273,7 +273,7 @@
       ansible.builtin.async_status:
         jid: "{{ _dr_fsx_job.ansible_job_id }}"
       register: _dr_fsx_apply
-      until: _dr_fsx_apply.finished
+      until: _dr_fsx_apply.finished | bool
       retries: 120
       delay: 30
       when: not (_dr_fsx_prepared.skipped | default(false))
@@ -678,15 +678,54 @@
           fi
 
           # ---------------------------------------------------------------
-          # 2. Unmount non-root volumes (preparation for AWS-level deletion)
+          # 1b. Release orphaned SnapMirror source info
           #
-          # Actual volume deletion is handled by the AWS FSx API with
-          # SkipFinalBackup, which correctly removes cloud-backup
-          # (SnapMirror Cloud) protection.  The ONTAP API cannot delete
-          # volumes that have FSx automatic-backup protection.
-          # Unmounting here speeds up the AWS-side delete.
+          # Even after relationships are deleted, ONTAP retains source-side
+          # metadata (visible via snapmirror list-destinations). FSx will
+          # refuse to delete volumes that still have this metadata.
           # ---------------------------------------------------------------
-          echo "=== Unmounting non-root volumes ==="
+          echo "=== Releasing SnapMirror source info ==="
+          DEST_LINES=$(api_get "/api/private/cli/snapmirror/list-destinations?fields=source-path,destination-path" \
+            | json_arr "r.get('source_path','')+'|'+r.get('destination_path','')")
+
+          if [ -z "${DEST_LINES}" ]; then
+            echo "  No SnapMirror source entries found"
+          else
+            echo "${DEST_LINES}" | while IFS='|' read -r SRC_PATH DST_PATH; do
+              echo "  Releasing ${SRC_PATH} -> ${DST_PATH}..."
+              api_get "" >/dev/null 2>&1  # no-op to keep auth warm
+              RESP=$(curl -sk -u "${AUTH}" -X POST -H 'Content-Type: application/json' \
+                -d "{\"source_path\": \"${SRC_PATH}\", \"destination_path\": \"${DST_PATH}\", \"relationship_info_only\": true}" \
+                "https://${MGMT}/api/private/cli/snapmirror/release" 2>/dev/null)
+              ERR=$(echo "${RESP}" | json_val "d.get('error',{}).get('message','')")
+              if [ -n "${ERR}" ]; then
+                echo "    ${ERR}"
+              else
+                echo "    Released"
+              fi
+            done
+
+            echo "  Polling release completion (max 1 min)..."
+            for i in $(seq 1 12); do
+              LEFT=$(api_get "/api/private/cli/snapmirror/list-destinations" \
+                | json_val "d.get('num_records',0)")
+              if [ "${LEFT}" = "0" ]; then
+                echo "  All SnapMirror source info released"
+                break
+              fi
+              echo "  ${LEFT} entry(ies) remaining (${i}/12)..."
+              sleep 5
+            done
+          fi
+
+          # ---------------------------------------------------------------
+          # 2. Delete non-root volumes
+          #
+          # FSx refuses to delete an SVM that still has non-root volumes.
+          # We must offline and delete them via the ONTAP API before
+          # Terraform can destroy the SVM/filesystem.
+          # ---------------------------------------------------------------
+          echo "=== Deleting non-root volumes ==="
           VOL_LINES=$(api_get "/api/storage/volumes?is_svm_root=false&fields=uuid,name,state,type" \
             | json_arr "r.get('uuid','')+'|'+r.get('name','')+'|'+r.get('state','')+'|'+r.get('type','')")
 
@@ -699,15 +738,39 @@
               if [ "${V_TYPE}" = "dp" ]; then
                 echo "    Converting DP volume to RW..."
                 api_patch "/api/storage/volumes/${V_UUID}" '{"type":"rw"}' >/dev/null 2>&1
-                sleep 1
+                sleep 2
               fi
 
-              echo "    Unmounting and offlining..."
+              echo "    Unmounting..."
               api_patch "/api/storage/volumes/${V_UUID}" '{"nas":{"path":""}}' >/dev/null 2>&1
               sleep 1
+
+              echo "    Offlining..."
               api_patch "/api/storage/volumes/${V_UUID}" '{"state":"offline"}' >/dev/null 2>&1
+              sleep 2
+
+              echo "    Deleting..."
+              DEL_RESP=$(api_del "/api/storage/volumes/${V_UUID}")
+              DEL_ERR=$(echo "${DEL_RESP}" | json_val "d.get('error',{}).get('message','')")
+              if [ -n "${DEL_ERR}" ]; then
+                echo "    ONTAP delete failed: ${DEL_ERR}"
+                echo "    Will retry via AWS FSx API later"
+              else
+                echo "    Deleted successfully"
+              fi
             done
-            echo "  Volumes unmounted/offlined (AWS API will handle deletion)"
+
+            echo "  Waiting for volume deletions to complete..."
+            for i in $(seq 1 30); do
+              VOL_LEFT=$(api_get "/api/storage/volumes?is_svm_root=false" \
+                | json_val "d.get('num_records',0)")
+              if [ "${VOL_LEFT}" = "0" ]; then
+                echo "  All non-root volumes deleted"
+                break
+              fi
+              echo "  ${VOL_LEFT} volume(s) remaining (${i}/30)..."
+              sleep 10
+            done
           fi
 
           # ---------------------------------------------------------------
@@ -820,6 +883,102 @@
       when: (_prod_cluster_lif | default('') != '') or (_dr_cluster_lif | default('') != '')
 
 # -----------------------------------------------------------------------------
+# Play: Clean up any remaining FSx volumes via AWS API
+#
+# If the ONTAP REST API couldn't delete volumes (e.g. backup-protected),
+# this play uses the AWS CLI as a fallback before Terraform attempts to
+# destroy the SVM/filesystem.
+# -----------------------------------------------------------------------------
+- name: Clean up remaining FSx volumes via AWS API
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _prod_fsx_name: "{{ prod_file_system_name | default(prod_cluster.cluster_name ~ '-' ~ prod_cluster.region ~ '-fsx') }}"
+    _dr_fsx_name: "{{ dr_file_system_name | default(dr_cluster.cluster_name ~ '-' ~ dr_cluster.region ~ '-fsx') }}"
+  tasks:
+    - name: Skip if not destroying
+      ansible.builtin.meta: end_play
+      when: not (destroy_resources | default(false))
+
+    - name: Look up FSx filesystem IDs by name tag
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws fsx describe-file-systems --region {{ item.region }} \
+          --query "FileSystems[?Tags[?Key=='Name' && Value=='{{ item.name }}']].FileSystemId" \
+          --output text 2>/dev/null | head -1
+      loop:
+        - name: "{{ _prod_fsx_name }}"
+          region: "{{ prod_cluster.region }}"
+          label: "Production"
+        - name: "{{ _dr_fsx_name }}"
+          region: "{{ dr_cluster.region }}"
+          label: "DR"
+      loop_control:
+        label: "{{ item.label }}"
+      register: _fsx_ids
+      changed_when: false
+      failed_when: false
+
+    - name: Delete remaining non-root volumes via AWS FSx API
+      ansible.builtin.shell: |
+        set -o pipefail
+        FS_ID="{{ item.stdout | trim }}"
+        REGION="{{ item.item.region }}"
+        LABEL="{{ item.item.label }}"
+
+        if [ -z "${FS_ID}" ] || [ "${FS_ID}" = "None" ]; then
+          echo "SKIP: No filesystem found for ${LABEL}"
+          exit 0
+        fi
+
+        echo "=== Cleaning up volumes on ${LABEL} filesystem ${FS_ID} ==="
+
+        VOL_IDS=$(aws fsx describe-volumes --region ${REGION} \
+          --filters "Name=file-system-id,Values=${FS_ID}" \
+          --query "Volumes[?OntapConfiguration.StorageVirtualMachineRoot!=\`true\`].VolumeId" \
+          --output text 2>/dev/null)
+
+        if [ -z "${VOL_IDS}" ] || [ "${VOL_IDS}" = "None" ]; then
+          echo "  No non-root volumes to clean up"
+          exit 0
+        fi
+
+        for VOL_ID in ${VOL_IDS}; do
+          echo "  Deleting ${VOL_ID} via AWS FSx API..."
+          aws fsx delete-volume --region ${REGION} \
+            --volume-id ${VOL_ID} \
+            --ontap-configuration '{"SkipFinalBackup":true}' 2>&1 || true
+        done
+
+        echo "  Waiting for volume deletions to propagate..."
+        for i in $(seq 1 30); do
+          REMAINING=$(aws fsx describe-volumes --region ${REGION} \
+            --filters "Name=file-system-id,Values=${FS_ID}" \
+            --query "length(Volumes[?OntapConfiguration.StorageVirtualMachineRoot!=\`true\` && Lifecycle!='DELETING' && Lifecycle!='FAILED'])" \
+            --output text 2>/dev/null)
+          if [ "${REMAINING}" = "0" ] || [ "${REMAINING}" = "None" ]; then
+            echo "  All non-root volumes deleted or deleting"
+            break
+          fi
+          echo "  ${REMAINING} volume(s) still active (${i}/30)..."
+          sleep 10
+        done
+      loop: "{{ _fsx_ids.results }}"
+      loop_control:
+        label: "{{ item.item.label }}"
+      register: _vol_cleanup
+      changed_when: "'Deleting' in (item.stdout | default(''))"
+      failed_when: false
+
+    - name: Display volume cleanup results
+      ansible.builtin.debug:
+        msg: "{{ item.stdout_lines | default(['(skipped)']) }}"
+      loop: "{{ _vol_cleanup.results }}"
+      loop_control:
+        label: "{{ item.item.item.label }}"
+      when: item.stdout is defined
+
+# -----------------------------------------------------------------------------
 - name: Destroy FSx ONTAP Filesystems (parallel)
   hosts: localhost
   gather_facts: false
@@ -930,7 +1089,7 @@
       ansible.builtin.async_status:
         jid: "{{ _prod_fsx_destroy_job.ansible_job_id }}"
       register: _prod_fsx_destroy
-      until: _prod_fsx_destroy.finished
+      until: _prod_fsx_destroy.finished | bool
       retries: 120
       delay: 30
       when: not (_prod_fsx_prepared.skipped | default(false))
@@ -939,7 +1098,7 @@
       ansible.builtin.async_status:
         jid: "{{ _dr_fsx_destroy_job.ansible_job_id }}"
       register: _dr_fsx_destroy
-      until: _dr_fsx_destroy.finished
+      until: _dr_fsx_destroy.finished | bool
       retries: 120
       delay: 30
       when: not (_dr_fsx_prepared.skipped | default(false))
