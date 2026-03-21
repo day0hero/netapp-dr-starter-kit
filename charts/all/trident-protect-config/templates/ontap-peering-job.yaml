@@ -110,27 +110,13 @@ spec:
                       exit 0
                     fi
 
-                    if [ "${SVM_STATE}" = "pending" ]; then
-                      echo "  Accepting pending SVM peer ${SVM_UUID}..."
-                      RESP=$(api -X PATCH "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers/${SVM_UUID}" \
-                        -d '{"state":"peered"}' -w "\n%{http_code}" 2>/dev/null)
-                      HTTP=$(echo "${RESP}" | tail -1)
-                      echo "  HTTP ${HTTP}"
-                      exit 0
-                    fi
-
-                    if [ "${SVM_STATE}" = "initiated" ]; then
-                      echo "  SVM peer initiated — waiting for remote to accept"
+                    if [ "${SVM_STATE}" = "initiated" ] || [ "${SVM_STATE}" = "pending" ]; then
+                      echo "  SVM peer in progress (${SVM_STATE}) — will check again next schedule"
                       exit 0
                     fi
                   fi
 
                   if [ "${SVM_PEER_COUNT}" -eq 0 ]; then
-                    if [ "${ROLE}" = "acceptor" ]; then
-                      echo "  Acceptor: no SVM peer yet — waiting for initiator to create"
-                      exit 0
-                    fi
-
                     SVM_PEER_ALIAS="${REMOTE_SVM}"
                     if [ "${LOCAL_SVM}" = "${REMOTE_SVM}" ]; then
                       SVM_PEER_ALIAS="${REMOTE_SVM}-${PEER_NAME}"
