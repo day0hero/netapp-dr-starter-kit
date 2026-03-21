@@ -1,5 +1,14 @@
 # Schedules are source-cluster only (hub creates snapshots for replication)
 tridentProtect:
+  snapshots:
+    - name: init-boutique
+      applicationRef: boutique
+      appVaultRef: s3-appvault
+      reclaimPolicy: Delete
+    - name: init-wordpress
+      applicationRef: wordpress
+      appVaultRef: s3-appvault
+      reclaimPolicy: Delete
   schedules:
     - name: boutique-hourly
       applicationRef: boutique
