@@ -12,6 +12,7 @@ spec:
   sourceAppVaultRef: {{ .sourceAppVaultRef }}
   destinationAppVaultRef: {{ .destinationAppVaultRef }}
   sourceApplicationName: {{ .sourceApplicationName }}
+  sourceApplicationUID: {{ .sourceApplicationUID | default "00000000-0000-0000-0000-000000000000" }}
   {{- if .namespaceMapping }}
   namespaceMapping:
     {{- toYaml .namespaceMapping | nindent 4 }}
