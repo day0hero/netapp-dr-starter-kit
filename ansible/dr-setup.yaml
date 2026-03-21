@@ -198,7 +198,7 @@
         fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
         fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
         fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
-        fsx_ontap_terraform_svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_svm_name: "SVM1"
         fsx_ontap_terraform_allowed_cidrs:
           - "{{ prod_cluster.vpc_cidr }}"
           - "{{ dr_cluster.vpc_cidr }}"
@@ -220,7 +220,7 @@
         fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
         fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
         fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
-        fsx_ontap_terraform_svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_svm_name: "SVM2"
         fsx_ontap_terraform_allowed_cidrs:
           - "{{ dr_cluster.vpc_cidr }}"
           - "{{ prod_cluster.vpc_cidr }}"
@@ -863,7 +863,7 @@
         fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
         fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
         fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
-        fsx_ontap_terraform_svm_name: "{{ prod_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_svm_name: "SVM1"
         fsx_ontap_terraform_allowed_cidrs:
           - "{{ prod_cluster.vpc_cidr }}"
           - "{{ dr_cluster.vpc_cidr }}"
@@ -886,7 +886,7 @@
         fsx_ontap_terraform_state_region: "{{ prod_cluster.region }}"
         fsx_ontap_terraform_state_bucket: "{{ terraform_state_bucket }}"
         fsx_ontap_terraform_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
-        fsx_ontap_terraform_svm_name: "{{ dr_cluster.cluster_name }}-SVM1"
+        fsx_ontap_terraform_svm_name: "SVM2"
         fsx_ontap_terraform_allowed_cidrs:
           - "{{ dr_cluster.vpc_cidr }}"
           - "{{ prod_cluster.vpc_cidr }}"

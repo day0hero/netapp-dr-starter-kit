@@ -55,6 +55,11 @@ tridentProtect:
     secretName: ontap-cluster-admin-creds
     vaultKey: secret/data/global/fsx-cluster-admin
 
+  # SnapMirror health check (detects and fixes intra-cluster SnapMirrors)
+  snapmirrorHealth:
+    enabled: true
+    schedule: "*/5 * * * *"
+
   # Applications to protect
   # Each application can include one or more namespaces
   applications: []

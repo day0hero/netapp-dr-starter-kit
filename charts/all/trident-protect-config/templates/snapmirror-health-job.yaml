@@ -1,0 +1,126 @@
+{{- if .Values.tridentProtect.snapmirrorHealth.enabled }}
+{{- if .Values.tridentFSX.clusterLIF }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: snapmirror-health-check
+  namespace: trident-protect
+  annotations:
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  schedule: {{ .Values.tridentProtect.snapmirrorHealth.schedule | default "*/5 * * * *" | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 180
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: trident-protect-amr-reconcile
+          containers:
+            - name: snapmirror-health
+              image: {{ .Values.tridentProtect.snapmirrorHealth.image | default .Values.tridentProtect.ontapPeering.image }}
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -o pipefail
+                  ONTAP_USER=$(cat /credentials/username)
+                  ONTAP_PASS=$(cat /credentials/password)
+                  AUTH="${ONTAP_USER}:${ONTAP_PASS}"
+                  MGMT="{{ .Values.tridentFSX.clusterLIF }}"
+                  LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
+                  REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
+
+                  api() { curl -sk -u "${AUTH}" -H "Content-Type: application/json" "$@"; }
+
+                  echo "=== SnapMirror Health Check ($(date -u +%H:%M:%S)) ==="
+                  echo "  Local SVM: ${LOCAL_SVM}  Remote SVM: ${REMOTE_SVM}"
+
+                  HTTP=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 5 \
+                    -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
+                  if [ "${HTTP}" = "000" ] || [ "${HTTP}" -ge 400 ]; then
+                    echo "Cannot reach ONTAP API (HTTP ${HTTP})"
+                    exit 0
+                  fi
+
+                  LOCAL_CLUSTER=$(api "https://${MGMT}/api/cluster?fields=uuid,name" \
+                    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('uuid',''))" 2>/dev/null)
+                  LOCAL_NAME=$(api "https://${MGMT}/api/cluster?fields=name" \
+                    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))" 2>/dev/null)
+                  echo "  Local cluster: ${LOCAL_NAME} (${LOCAL_CLUSTER})"
+
+                  PEER_CLUSTER=""
+                  PEER_NAME=""
+                  PEER_JSON=$(api "https://${MGMT}/api/cluster/peers?fields=uuid,name")
+                  PEER_COUNT=$(echo "${PEER_JSON}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('num_records',0))" 2>/dev/null)
+                  if [ "${PEER_COUNT}" -gt 0 ]; then
+                    PEER_CLUSTER=$(echo "${PEER_JSON}" | python3 -c "import sys,json; print(json.load(sys.stdin)['records'][0]['uuid'])" 2>/dev/null)
+                    PEER_NAME=$(echo "${PEER_JSON}" | python3 -c "import sys,json; print(json.load(sys.stdin)['records'][0]['name'])" 2>/dev/null)
+                    echo "  Peer cluster: ${PEER_NAME} (${PEER_CLUSTER})"
+                  else
+                    echo "  WARNING: No cluster peer found — SnapMirror cannot function"
+                    exit 0
+                  fi
+
+                  SM_JSON=$(api "https://${MGMT}/api/snapmirror/relationships?fields=uuid,state,healthy,source.path,source.cluster.uuid,destination.path,destination.cluster.uuid,transfer")
+                  SM_COUNT=$(echo "${SM_JSON}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('num_records',0))" 2>/dev/null)
+
+                  if [ "${SM_COUNT}" = "0" ]; then
+                    echo "  No SnapMirror relationships found"
+                    exit 0
+                  fi
+
+                  echo "  Found ${SM_COUNT} SnapMirror relationship(s)"
+                  echo ""
+
+                  INTRA_CLUSTER=0
+                  UNHEALTHY=0
+                  UNINITIALIZED=0
+                  HEALTHY=0
+
+                  echo "${SM_JSON}" | python3 -c "
+                  import sys, json
+                  d = json.load(sys.stdin)
+                  for r in d.get('records', []):
+                      src_cluster = r.get('source',{}).get('cluster',{}).get('uuid','')
+                      dst_cluster = r.get('destination',{}).get('cluster',{}).get('uuid','')
+                      src_path = r.get('source',{}).get('path','')
+                      dst_path = r.get('destination',{}).get('path','')
+                      state = r.get('state','')
+                      healthy = r.get('healthy', False)
+                      uuid = r.get('uuid','')
+                      intra = 'INTRA' if src_cluster == dst_cluster else 'CROSS'
+                      health = 'OK' if healthy else 'UNHEALTHY'
+                      print(f'{uuid}|{src_path}|{dst_path}|{state}|{health}|{intra}|{src_cluster}')
+                  " 2>/dev/null | while IFS='|' read -r UUID SRC DST STATE HEALTH TOPOLOGY SRC_UUID; do
+                    echo "  [${TOPOLOGY}] ${SRC} -> ${DST}"
+                    echo "    State: ${STATE}  Health: ${HEALTH}  UUID: ${UUID}"
+
+                    if [ "${TOPOLOGY}" = "INTRA" ]; then
+                      echo "    ACTION: Intra-cluster SnapMirror detected — deleting for recreation"
+                      api -X DELETE "https://${MGMT}/api/snapmirror/relationships/${UUID}" \
+                        -o /dev/null -w "    Delete HTTP %{http_code}\n" 2>/dev/null
+                    fi
+
+                    if [ "${STATE}" = "uninitialized" ] && [ "${TOPOLOGY}" = "CROSS" ]; then
+                      echo "    ACTION: Initializing cross-cluster SnapMirror transfer"
+                      api -X POST "https://${MGMT}/api/snapmirror/relationships/${UUID}/transfers" \
+                        -d '{}' -o /dev/null -w "    Initialize HTTP %{http_code}\n" 2>/dev/null
+                    fi
+                  done
+
+                  echo ""
+                  echo "=== Health check complete ==="
+              volumeMounts:
+                - name: ontap-creds
+                  mountPath: /credentials
+                  readOnly: true
+          volumes:
+            - name: ontap-creds
+              secret:
+                secretName: {{ .Values.tridentProtect.ontapPeering.secretName }}
+{{- end }}
+{{- end }}
