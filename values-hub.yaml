@@ -26,19 +26,19 @@ tridentProtect:
       backupRetention: "7"
 # The build-dr make target will update the configuration in tridentFSX
 tridentFSX:
-  mgmtLIF: 198.19.48.223
-  clusterLIF: "198.19.48.185"
+  mgmtLIF: 198.19.192.152
+  clusterLIF: "198.19.192.69"
   svm: SVM1
   interclusterIPs:
-    - 10.0.133.112
-    - 10.0.156.176
+    - 10.0.129.86
+    - 10.0.153.125
   peer:
-    mgmtLIF: "198.19.94.55"
-    clusterLIF: "198.19.94.132"
-    svm: SVM1-FsxId018a963527d074e1b
+    mgmtLIF: "198.19.64.57"
+    clusterLIF: "198.19.64.50"
+    svm: SVM2-FsxId0a4d4ac100ff554fe
     interclusterIPs:
-      - 10.100.132.180
-      - 10.100.147.241
+      - 10.100.128.104
+      - 10.100.158.1
 clusterGroup:
   name: hub
   argoCD:

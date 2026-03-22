@@ -20,19 +20,19 @@ tridentProtect:
         - source: wordpress
           destination: wordpress
 tridentFSX:
-  mgmtLIF: 198.19.94.55
-  clusterLIF: "198.19.94.132"
-  svm: SVM1
+  mgmtLIF: 198.19.64.57
+  clusterLIF: "198.19.64.50"
+  svm: SVM2
   interclusterIPs:
-    - 10.100.132.180
-    - 10.100.147.241
+    - 10.100.128.104
+    - 10.100.158.1
   peer:
-    mgmtLIF: "198.19.48.223"
-    clusterLIF: "198.19.48.185"
-    svm: SVM1-FsxId01c6082979219c9e3
+    mgmtLIF: "198.19.192.152"
+    clusterLIF: "198.19.192.69"
+    svm: SVM1-FsxId0d0ea63b696458238
     interclusterIPs:
-      - 10.0.133.112
-      - 10.0.156.176
+      - 10.0.129.86
+      - 10.0.153.125
 clusterGroup:
   name: secondary
   argoCD:
