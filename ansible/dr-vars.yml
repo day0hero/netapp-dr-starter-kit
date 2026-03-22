@@ -69,8 +69,10 @@ fsx_ontap_terraform_weekly_maintenance_time: "7:01:00"  # d:HH:MM (UTC)
 # SVM Configuration
 # Production gets SVM1, DR gets SVM2. Distinct names are required so that
 # ONTAP SnapMirror correctly resolves cross-cluster volume handles.
-# The playbook overrides this per-cluster in dr-setup.yaml.
-fsx_ontap_terraform_svm_name: "SVM1"
+# SVM names are set per-cluster in dr-setup.yaml (not here, because
+# extra-vars have the highest Ansible precedence and would override
+# the per-cluster values in the playbook).
+# fsx_ontap_terraform_svm_name: — set in dr-setup.yaml
 fsx_ontap_terraform_root_volume_security_style: "UNIX"
 
 # Secrets Manager
