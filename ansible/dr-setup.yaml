@@ -538,8 +538,11 @@
 #
 # Order matters — reverse of creation:
 #   0. Remove ONTAP SVM/cluster peering (required before SVM deletion)
-#   1. FSx filesystems (both regions)
-#   2. VPC peering
+#   1. Scrub AppVault S3 bucket (dr-metadata + snapshot archives)
+#   2. Clean up remaining FSx volumes via AWS API
+#   3. FSx filesystems (both regions)
+#   4. Route53 DR failover (if configured)
+#   5. VPC peering
 #
 # Note: The Terraform state backend (S3 + DynamoDB) is NOT destroyed here.
 # Use "make destroy-terraform-state" separately if you want to remove it.
@@ -959,6 +962,77 @@
       ansible.builtin.pause:
         seconds: 15
       when: (_prod_cluster_lif | default('') != '') or (_dr_cluster_lif | default('') != '')
+
+# -----------------------------------------------------------------------------
+# Play: Scrub DR metadata from the AppVault S3 bucket
+# -----------------------------------------------------------------------------
+- name: Scrub AppVault S3 DR metadata
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _project_root: "{{ playbook_dir }}/.."
+  tasks:
+    - name: Skip if not destroying
+      ansible.builtin.meta: end_play
+      when: not (destroy_resources | default(false))
+
+    - name: Read AppVault bucket config from values-global.yaml
+      ansible.builtin.shell: |
+        BUCKET=$(yq '.tridentProtect.appVault.s3.bucketName // ""' {{ _project_root }}/values-global.yaml)
+        REGION=$(yq '.tridentProtect.appVault.s3.region // ""' {{ _project_root }}/values-global.yaml)
+        echo "${BUCKET} ${REGION}"
+      register: _appvault_info
+      changed_when: false
+
+    - name: Set bucket facts
+      ansible.builtin.set_fact:
+        _appvault_bucket: "{{ _appvault_info.stdout.split()[0] }}"
+        _appvault_region: "{{ _appvault_info.stdout.split()[1] }}"
+
+    - name: Skip if bucket not configured
+      ansible.builtin.meta: end_play
+      when: _appvault_bucket == '' or _appvault_bucket == 'null'
+
+    - name: Remove dr-metadata/ prefix from AppVault bucket
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "Removing dr-metadata/ from s3://{{ _appvault_bucket }}..."
+        aws s3 rm "s3://{{ _appvault_bucket }}/dr-metadata/" --recursive --region {{ _appvault_region }} 2>&1 || true
+      register: _s3_dr_metadata
+      changed_when: "'delete' in (_s3_dr_metadata.stdout | default(''))"
+
+    - name: Remove snapshot archives from AppVault bucket
+      ansible.builtin.shell: |
+        set -o pipefail
+        BUCKET="{{ _appvault_bucket }}"
+        REGION="{{ _appvault_region }}"
+        echo "Cleaning AppVault snapshot data from s3://${BUCKET}..."
+        PREFIXES=$(aws s3api list-objects-v2 --bucket "${BUCKET}" --region "${REGION}" \
+          --delimiter "/" --query "CommonPrefixes[].Prefix" --output text 2>/dev/null || echo "")
+        if [ -z "${PREFIXES}" ] || [ "${PREFIXES}" = "None" ]; then
+          echo "  Bucket is empty or inaccessible — nothing to remove"
+          exit 0
+        fi
+        COUNT=0
+        for PREFIX in ${PREFIXES}; do
+          echo "  Removing s3://${BUCKET}/${PREFIX}..."
+          aws s3 rm "s3://${BUCKET}/${PREFIX}" --recursive --region "${REGION}" 2>&1
+          COUNT=$((COUNT + 1))
+        done
+        echo "Removed ${COUNT} top-level prefix(es) from AppVault bucket"
+      register: _s3_appvault_clean
+      changed_when: "'Removed' in (_s3_appvault_clean.stdout | default(''))"
+
+    - name: Display S3 cleanup results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AppVault S3 Cleanup"
+          - "=========================================="
+          - "  Bucket: {{ _appvault_bucket }}"
+          - "  DR metadata: {{ _s3_dr_metadata.stdout | default('skipped') }}"
+          - "  AppVault data: {{ _s3_appvault_clean.stdout_lines | default(['skipped']) | last }}"
+          - "=========================================="
 
 # -----------------------------------------------------------------------------
 # Play: Clean up any remaining FSx volumes via AWS API
