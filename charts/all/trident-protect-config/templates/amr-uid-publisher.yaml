@@ -79,24 +79,38 @@ data:
         )
         urllib.request.urlopen(req)
 
-    uids = {}
-    for app in APPS:
-        name = app["name"]
-        ns = app["namespaces"][0]["name"]
-        data = kube_get(f"/apis/protect.trident.netapp.io/v1/namespaces/{ns}/applications/{name}")
-        if data and "metadata" in data:
-            uid = data["metadata"]["uid"]
-            uids[name] = {"uid": uid, "namespace": ns}
-            print(f"  {name}: {uid}")
-        else:
-            print(f"  {name}: not found (skipping)")
+    import time
+
+    MAX_RETRIES = 6
+    RETRY_DELAY = 10
+    for attempt in range(MAX_RETRIES):
+        uids = {}
+        missing = []
+        for app in APPS:
+            name = app["name"]
+            ns = app["namespaces"][0]["name"]
+            data = kube_get(f"/apis/protect.trident.netapp.io/v1/namespaces/{ns}/applications/{name}")
+            if data and "metadata" in data:
+                uid = data["metadata"]["uid"]
+                uids[name] = {"uid": uid, "namespace": ns}
+                print(f"  {name}: {uid}")
+            else:
+                missing.append(name)
+                print(f"  {name}: not found yet")
+
+        if not missing:
+            break
+        if attempt < MAX_RETRIES - 1:
+            print(f"  Waiting {RETRY_DELAY}s for missing apps: {missing}")
+            time.sleep(RETRY_DELAY)
 
     if uids:
         body = json.dumps({"applicationUIDs": uids}, indent=2).encode("utf-8")
         s3_put(body)
         print(f"Published {len(uids)} UID(s) to s3://{BUCKET}/{S3_KEY}")
     else:
-        print("No UIDs to publish")
+        print("ERROR: No UIDs to publish — Application CRs not found")
+        sys.exit(1)
 ---
 apiVersion: batch/v1
 kind: Job

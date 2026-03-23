@@ -35,7 +35,7 @@ tridentFSX:
   peer:
     mgmtLIF: "198.19.158.108"
     clusterLIF: "198.19.158.137"
-    svm: SVM2-FsxId07816bf2bb1322f2c
+    svm: SVM2
     interclusterIPs:
       - 10.100.169.205
       - 10.100.178.254

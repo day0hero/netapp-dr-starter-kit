@@ -360,19 +360,12 @@
         yq -i '.tridentFSX.svm = "{{ dr_fsx.svm_name }}"' {{ _project_root }}/values-secondary.yaml
       changed_when: true
 
-    - name: Compute SVM peer aliases
-      ansible.builtin.set_fact:
-        _hub_peer_svm: >-
-          {{ dr_fsx.svm_name }}-{{ 'FsxId' ~ dr_fsx.file_system_id | regex_replace('^fs-', '') }}
-        _secondary_peer_svm: >-
-          {{ prod_fsx.svm_name }}-{{ 'FsxId' ~ prod_fsx.file_system_id | regex_replace('^fs-', '') }}
-
     - name: Update values-hub.yaml intercluster and peer info
       ansible.builtin.shell: |
         yq -i '.tridentFSX.interclusterIPs = {{ prod_fsx.intercluster_ips | to_json }}' {{ _project_root }}/values-hub.yaml
         yq -i '.tridentFSX.peer.mgmtLIF = "{{ _secondary_mgmt_lif }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.tridentFSX.peer.clusterLIF = "{{ _secondary_cluster_lif }}"' {{ _project_root }}/values-hub.yaml
-        yq -i '.tridentFSX.peer.svm = "{{ _hub_peer_svm | trim }}"' {{ _project_root }}/values-hub.yaml
+        yq -i '.tridentFSX.peer.svm = "{{ dr_fsx.svm_name }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.tridentFSX.peer.interclusterIPs = {{ dr_fsx.intercluster_ips | to_json }}' {{ _project_root }}/values-hub.yaml
       changed_when: true
 
@@ -381,7 +374,7 @@
         yq -i '.tridentFSX.interclusterIPs = {{ dr_fsx.intercluster_ips | to_json }}' {{ _project_root }}/values-secondary.yaml
         yq -i '.tridentFSX.peer.mgmtLIF = "{{ _hub_mgmt_lif }}"' {{ _project_root }}/values-secondary.yaml
         yq -i '.tridentFSX.peer.clusterLIF = "{{ _hub_cluster_lif }}"' {{ _project_root }}/values-secondary.yaml
-        yq -i '.tridentFSX.peer.svm = "{{ _secondary_peer_svm | trim }}"' {{ _project_root }}/values-secondary.yaml
+        yq -i '.tridentFSX.peer.svm = "{{ prod_fsx.svm_name }}"' {{ _project_root }}/values-secondary.yaml
         yq -i '.tridentFSX.peer.interclusterIPs = {{ prod_fsx.intercluster_ips | to_json }}' {{ _project_root }}/values-secondary.yaml
       changed_when: true
 
@@ -398,7 +391,7 @@
           - "    tridentFSX.interclusterIPs:    {{ prod_fsx.intercluster_ips }}"
           - "    tridentFSX.peer.mgmtLIF:       {{ _secondary_mgmt_lif }}"
           - "    tridentFSX.peer.clusterLIF:    {{ _secondary_cluster_lif }}"
-          - "    tridentFSX.peer.svm:            {{ _hub_peer_svm | trim }}"
+          - "    tridentFSX.peer.svm:            {{ dr_fsx.svm_name }}"
           - "    tridentFSX.peer.interclusterIPs: {{ dr_fsx.intercluster_ips }}"
           - ""
           - "  values-secondary.yaml:"
@@ -408,7 +401,7 @@
           - "    tridentFSX.interclusterIPs:    {{ dr_fsx.intercluster_ips }}"
           - "    tridentFSX.peer.mgmtLIF:       {{ _hub_mgmt_lif }}"
           - "    tridentFSX.peer.clusterLIF:    {{ _hub_cluster_lif }}"
-          - "    tridentFSX.peer.svm:            {{ _secondary_peer_svm | trim }}"
+          - "    tridentFSX.peer.svm:            {{ prod_fsx.svm_name }}"
           - "    tridentFSX.peer.interclusterIPs: {{ prod_fsx.intercluster_ips }}"
           - "=========================================="
 

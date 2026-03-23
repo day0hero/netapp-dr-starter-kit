@@ -12,9 +12,10 @@ metadata:
 data:
   patch-uids.py: |
     #!/usr/bin/env python3
-    """Read hub Application UIDs from S3 and patch AMRs on the secondary."""
-    import json, os, sys, datetime, hashlib, hmac, ssl
+    """Discover source Application UIDs from the AppVault S3 bucket and patch AMRs."""
+    import json, os, sys, datetime, hashlib, hmac, ssl, urllib.parse
     import urllib.request, urllib.error
+    import xml.etree.ElementTree as ET
 
     TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
     API = "https://kubernetes.default.svc"
@@ -22,7 +23,6 @@ data:
     REGION = os.environ["S3_REGION"]
     ACCESS_KEY = os.environ["AWS_ACCESS_KEY_ID"]
     SECRET_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
-    S3_KEY = "dr-metadata/application-uids.json"
     AMR_DEFINITIONS = json.loads(os.environ.get("AMR_DEFINITIONS", "[]"))
 
     CTX = ssl.create_default_context()
@@ -32,15 +32,16 @@ data:
     def sign(key, msg):
         return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
 
-    def s3_get():
+    def s3_request(method, path, query_params=None):
         host = f"{BUCKET}.s3.{REGION}.amazonaws.com"
         now = datetime.datetime.now(datetime.timezone.utc)
         datestamp = now.strftime("%Y%m%d")
         amzdate = now.strftime("%Y%m%dT%H%M%SZ")
         payload_hash = hashlib.sha256(b"").hexdigest()
 
+        qs = urllib.parse.urlencode(sorted((query_params or {}).items()))
         canonical = "\n".join([
-            "GET", f"/{S3_KEY}", "",
+            method, f"/{path}", qs,
             f"host:{host}", f"x-amz-content-sha256:{payload_hash}",
             f"x-amz-date:{amzdate}", "",
             "host;x-amz-content-sha256;x-amz-date", payload_hash,
@@ -58,15 +59,64 @@ data:
                 f"SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
                 f"Signature={sig}")
 
-        req = urllib.request.Request(
-            f"https://{host}/{S3_KEY}",
-            headers={
-                "Host": host, "x-amz-date": amzdate,
-                "x-amz-content-sha256": payload_hash,
-                "Authorization": auth,
-            },
-        )
-        return json.loads(urllib.request.urlopen(req).read())
+        url = f"https://{host}/{path}"
+        if qs:
+            url += f"?{qs}"
+        req = urllib.request.Request(url, headers={
+            "Host": host, "x-amz-date": amzdate,
+            "x-amz-content-sha256": payload_hash,
+            "Authorization": auth,
+        })
+        return urllib.request.urlopen(req).read()
+
+    def discover_app_uid(app_name):
+        """Scan AppVault S3 for snapshot directories matching this app and return the UID."""
+        params = {
+            "list-type": "2",
+            "prefix": f"{app_name}_",
+            "delimiter": "/",
+            "max-keys": "50",
+        }
+        raw = s3_request("GET", "", params)
+        root = ET.fromstring(raw)
+        ns = root.tag.rsplit("}", 1)[0] + "}" if "}" in root.tag else ""
+
+        prefixes = []
+        for cp in root.findall(f"{ns}CommonPrefixes"):
+            p = cp.findtext(f"{ns}Prefix", "")
+            if p:
+                prefixes.append(p.rstrip("/"))
+
+        if not prefixes:
+            return None
+
+        best_uid = None
+        best_ts = ""
+        for prefix in prefixes:
+            uid = prefix.split("_", 1)[1] if "_" in prefix else None
+            if not uid:
+                continue
+            snap_params = {
+                "list-type": "2",
+                "prefix": f"{prefix}/snapshots/",
+                "max-keys": "5",
+            }
+            try:
+                snap_raw = s3_request("GET", "", snap_params)
+                snap_root = ET.fromstring(snap_raw)
+                count = int(snap_root.findtext(f"{ns}KeyCount", "0"))
+                if count > 0:
+                    keys = [c.findtext(f"{ns}Key", "") for c in snap_root.findall(f"{ns}Contents")]
+                    latest_key = sorted(keys, reverse=True)[0] if keys else ""
+                    ts = latest_key.split("/snapshots/", 1)[-1][:14] if "/snapshots/" in latest_key else ""
+                    if ts > best_ts:
+                        best_ts = ts
+                        best_uid = uid
+            except Exception as e:
+                print(f"    Warning: could not list snapshots for {prefix}: {e}")
+                continue
+
+        return best_uid
 
     def kube_api(method, path, data=None):
         token = open(TOKEN_PATH).read().strip()
@@ -85,20 +135,7 @@ data:
             print(f"  API error {e.code}: {err}", file=sys.stderr)
             return {"error": err, "code": e.code}
 
-    # Read hub UIDs from S3
-    print("=== Reading hub Application UIDs from S3 ===")
-    try:
-        manifest = s3_get()
-        hub_uids = manifest.get("applicationUIDs", {})
-        print(f"  Found {len(hub_uids)} application UID(s)")
-        for name, info in hub_uids.items():
-            print(f"    {name}: {info['uid']}")
-    except Exception as e:
-        print(f"  ERROR: Could not read UIDs from S3: {e}")
-        print("  Make sure the hub PostSync hook has run at least once.")
-        sys.exit(1)
-
-    # Patch each AMR
+    print("=== AMR UID Patch — discovering UIDs from AppVault snapshots ===")
     errors = 0
     for amr in AMR_DEFINITIONS:
         amr_name = amr["name"]
@@ -106,14 +143,15 @@ data:
         app_ns = amr.get("sourceApplicationNamespace", app_name)
         base = f"/apis/protect.trident.netapp.io/v1/namespaces/{app_ns}"
 
-        print(f"\n--- {amr_name} ---")
+        print(f"\n--- {amr_name} (app={app_name}) ---")
 
-        if app_name not in hub_uids:
-            print(f"  ERROR: No hub UID for application '{app_name}'")
+        discovered_uid = discover_app_uid(app_name)
+        if not discovered_uid:
+            print(f"  ERROR: No snapshots found in AppVault for app '{app_name}'")
             errors += 1
             continue
+        print(f"  Discovered UID from AppVault: {discovered_uid}")
 
-        hub_uid = hub_uids[app_name]["uid"]
         amr_data = kube_api("GET", f"{base}/appmirrorrelationships/{amr_name}")
         if "error" in amr_data:
             print(f"  AMR not found yet, skipping")
@@ -124,9 +162,9 @@ data:
         current_nsmap = amr_data.get("spec", {}).get("namespaceMapping") or []
 
         patch = {}
-        if current_uid != hub_uid:
-            print(f"  sourceApplicationUID: {current_uid or '<empty>'} -> {hub_uid}")
-            patch["sourceApplicationUID"] = hub_uid
+        if current_uid != discovered_uid:
+            print(f"  sourceApplicationUID: {current_uid or '<empty>'} -> {discovered_uid}")
+            patch["sourceApplicationUID"] = discovered_uid
 
         if not current_nsmap:
             app_data = kube_api("GET", f"{base}/applications/{app_name}")
@@ -147,7 +185,7 @@ data:
                 print(f"  Patch failed")
                 errors += 1
         else:
-            print(f"  No patch needed")
+            print(f"  No patch needed (UID already correct)")
 
     print(f"\n=== AMR UID patch complete (errors: {errors}) ===")
     sys.exit(1 if errors else 0)
@@ -161,8 +199,8 @@ metadata:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
-  backoffLimit: 2
-  ttlSecondsAfterFinished: 300
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
   template:
     spec:
       restartPolicy: Never

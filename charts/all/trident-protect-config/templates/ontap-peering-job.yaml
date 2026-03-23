@@ -97,13 +97,17 @@ spec:
                   fi
 
                   # ---- SVM peering ----
-                  SVM_PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers?fields=state,svm,peer,uuid")
+                  SVM_PEERS=$(api "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers?fields=state,svm,peer,name,uuid")
                   SVM_PEER_COUNT=$(echo "${SVM_PEERS}" | jq '.num_records // 0')
+                  echo "SVM peers found: ${SVM_PEER_COUNT}"
 
                   if [ "${SVM_PEER_COUNT}" -gt 0 ]; then
                     SVM_STATE=$(echo "${SVM_PEERS}" | jq -r '.records[0].state // "unknown"')
                     SVM_UUID=$(echo "${SVM_PEERS}" | jq -r '.records[0].uuid // empty')
-                    echo "SVM peer exists (${SVM_STATE})"
+                    SVM_PEER_NAME=$(echo "${SVM_PEERS}" | jq -r '.records[0].name // empty')
+                    SVM_LOCAL=$(echo "${SVM_PEERS}" | jq -r '.records[0].svm.name // empty')
+                    SVM_REMOTE=$(echo "${SVM_PEERS}" | jq -r '.records[0].peer.svm.name // empty')
+                    echo "SVM peer: name=${SVM_PEER_NAME} local=${SVM_LOCAL} remote=${SVM_REMOTE} state=${SVM_STATE}"
 
                     if [ "${SVM_STATE}" = "peered" ]; then
                       echo "=== Peering fully established ==="
@@ -111,15 +115,15 @@ spec:
                     fi
 
                     if [ "${SVM_STATE}" = "pending" ]; then
-                      SVM_ALIAS="${REMOTE_SVM}"
-                      if [ "${LOCAL_SVM}" = "${REMOTE_SVM}" ]; then
-                        SVM_ALIAS="${REMOTE_SVM}-${PEER_NAME}"
-                      fi
-                      echo "  Accepting pending SVM peer with alias '${SVM_ALIAS}'..."
+                      echo "  Accepting pending SVM peer..."
                       RESP=$(api -X PATCH "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers/${SVM_UUID}" \
-                        -d "{\"state\":\"peered\",\"name\":\"${SVM_ALIAS}\"}" -w "\n%{http_code}" 2>/dev/null)
+                        -d "{\"state\":\"peered\"}" -w "\n%{http_code}" 2>/dev/null)
                       HTTP=$(echo "${RESP}" | tail -1)
+                      BODY=$(echo "${RESP}" | sed '$d')
                       echo "  HTTP ${HTTP}"
+                      if [ "${HTTP}" -ge 400 ]; then
+                        echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
+                      fi
                       exit 0
                     fi
 
@@ -127,34 +131,37 @@ spec:
                       echo "  SVM peer initiated — waiting for remote to accept"
                       exit 0
                     fi
+
+                    echo "  Unexpected SVM peer state: ${SVM_STATE}"
+                    exit 0
                   fi
 
-                  if [ "${SVM_PEER_COUNT}" -eq 0 ]; then
-                    SVM_PEER_ALIAS="${REMOTE_SVM}"
-                    if [ "${LOCAL_SVM}" = "${REMOTE_SVM}" ]; then
-                      SVM_PEER_ALIAS="${REMOTE_SVM}-${PEER_NAME}"
-                      echo "  Using alias '${SVM_PEER_ALIAS}' (local/remote SVM names match)"
-                    fi
-
+                  if [ "${SVM_PEER_COUNT}" -eq 0 ] && [ "${ROLE}" = "initiator" ]; then
                     echo "Creating SVM peer: ${LOCAL_SVM} <-> ${REMOTE_SVM}..."
+                    PAYLOAD="{\"svm\":{\"name\":\"${LOCAL_SVM}\"},\"peer\":{\"cluster\":{\"uuid\":\"${PEER_UUID}\"},\"svm\":{\"name\":\"${REMOTE_SVM}\"}},\"applications\":[\"snapmirror\"]}"
+                    echo "  Payload: ${PAYLOAD}"
                     RESP=$(api -X POST "https://${LOCAL_CLUSTER_MGMT}/api/svm/peers" \
-                      -d "{\"name\":\"${SVM_PEER_ALIAS}\",\"svm\":{\"name\":\"${LOCAL_SVM}\"},\"peer\":{\"cluster\":{\"uuid\":\"${PEER_UUID}\"},\"svm\":{\"name\":\"${REMOTE_SVM}\"}},\"applications\":[\"snapmirror\"]}" \
+                      -d "${PAYLOAD}" \
                       -w "\n%{http_code}" 2>/dev/null)
                     HTTP=$(echo "${RESP}" | tail -1)
                     BODY=$(echo "${RESP}" | sed '$d')
                     echo "  HTTP ${HTTP}"
                     if [ "${HTTP}" -ge 400 ]; then
                       echo "  Error: $(echo "${BODY}" | jq -r '.error.message // "unknown"')"
-                      echo "  Will retry next schedule"
+                      echo "  Full response: ${BODY}"
                       exit 0
                     fi
-
                     if [ "${HTTP}" = "202" ]; then
                       JOB_UUID=$(echo "${BODY}" | jq -r '.job.uuid // empty')
                       if [ -n "${JOB_UUID}" ]; then
                         echo "  Async job ${JOB_UUID} started — will verify next schedule"
                       fi
                     fi
+                    exit 0
+                  fi
+
+                  if [ "${SVM_PEER_COUNT}" -eq 0 ] && [ "${ROLE}" = "acceptor" ]; then
+                    echo "  No SVM peers yet — waiting for initiator to create"
                     exit 0
                   fi
 
