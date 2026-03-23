@@ -1,0 +1,25 @@
+{{- if and (.Values.drFailover).enabled (.Values.drFailover).domain }}
+{{- range .Values.drFailover.apps }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .routeName }}
+  namespace: {{ .namespace }}
+  labels:
+    app.kubernetes.io/part-of: dr-failover
+    dr-failover/app: {{ .name }}
+spec:
+  host: {{ .name }}.{{ $.Values.drFailover.domain }}
+  to:
+    kind: Service
+    name: {{ .serviceName }}
+    weight: 100
+  port:
+    targetPort: {{ .servicePort }}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+{{- end }}
+{{- end }}

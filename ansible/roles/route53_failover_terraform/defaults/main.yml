@@ -1,0 +1,45 @@
+---
+# Defaults for route53_failover_terraform role
+
+# Terraform source directory
+route53_failover_tf_source: "{{ playbook_dir }}/../terraform/route53-failover"
+
+# Working directory for terraform execution
+route53_failover_workdir: "/tmp/netapp-dr-terraform/route53-failover"
+
+# Container configuration
+route53_failover_container_runtime: "podman"
+route53_failover_image: "quay.io/validatedpatterns/terraform:1.14.3"
+
+# Terraform state (S3 backend)
+route53_failover_state_bucket: ""
+route53_failover_state_region: ""
+route53_failover_state_dynamodb_table: "terraform-state-lock"
+route53_failover_state_key: "route53-failover/terraform.tfstate"
+
+# Route53 configuration
+route53_failover_domain: ""
+route53_failover_create_hosted_zone: true
+route53_failover_hosted_zone_id: ""
+
+# Cluster ingress hostnames (discovered by the playbook)
+route53_failover_primary_ingress_hostname: ""
+route53_failover_secondary_ingress_hostname: ""
+route53_failover_primary_health_fqdn: ""
+route53_failover_secondary_health_fqdn: ""
+
+# Apps to protect
+route53_failover_apps: []
+
+# Health check
+route53_failover_health_check_path: "/"
+route53_failover_record_ttl: 60
+
+# Tags
+route53_failover_tags:
+  ManagedBy: "Terraform"
+  Purpose: "DR-Failover"
+
+# Operation mode
+route53_failover_destroy: false
+route53_failover_prepare_only: false

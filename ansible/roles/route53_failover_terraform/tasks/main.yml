@@ -1,0 +1,287 @@
+---
+# route53_failover_terraform role
+#
+# Creates Route53 hosted zone, health checks, and failover records via Terraform.
+# Follows the same container-based Terraform pattern as fsx_ontap_terraform.
+
+- name: "Skip Route53 failover - domain not configured"
+  ansible.builtin.debug:
+    msg: "route53_failover_domain is empty — skipping Route53 failover setup"
+  when: route53_failover_domain | default('') == ''
+
+- name: "Skip Route53 failover - no apps configured"
+  ansible.builtin.debug:
+    msg: "route53_failover_apps is empty — skipping Route53 failover setup"
+  when:
+    - route53_failover_domain | default('') != ''
+    - (route53_failover_apps | default([]) | length) == 0
+
+- name: "Route53 failover setup"
+  when:
+    - route53_failover_domain | default('') != ''
+    - (route53_failover_apps | default([]) | length) > 0
+  block:
+    - name: "Display configuration"
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Route53 DR Failover"
+          - "=========================================="
+          - "Domain:    {{ route53_failover_domain }}"
+          - "Apps:      {{ route53_failover_apps | map(attribute='name') | list }}"
+          - "Primary:   {{ route53_failover_primary_ingress_hostname }}"
+          - "Secondary: {{ route53_failover_secondary_ingress_hostname }}"
+          - "Operation: {{ 'DESTROY' if (route53_failover_destroy | default(false)) else 'APPLY' }}"
+          - "=========================================="
+
+    # --- AWS credentials ---
+    - name: "Get AWS credentials"
+      ansible.builtin.shell: |
+        python3 -c "
+        import json, boto3
+        creds = boto3.Session().get_credentials().get_frozen_credentials()
+        print(json.dumps({'ak': creds.access_key, 'sk': creds.secret_key, 'st': creds.token or ''}))
+        "
+      register: _r53_boto3_creds
+      changed_when: false
+
+    - name: "Set AWS credentials"
+      ansible.builtin.set_fact:
+        _r53_aws_creds: "{{ _r53_boto3_creds.stdout | from_json }}"
+
+    # --- Check state bucket ---
+    - name: "Check S3 state bucket"
+      ansible.builtin.shell: >-
+        aws s3api head-bucket --bucket {{ route53_failover_state_bucket }} 2>/dev/null
+        && echo "exists" || echo "missing"
+      register: _r53_bucket_check
+      changed_when: false
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ _r53_aws_creds.ak }}"
+        AWS_SECRET_ACCESS_KEY: "{{ _r53_aws_creds.sk }}"
+        AWS_SESSION_TOKEN: "{{ _r53_aws_creds.st }}"
+        AWS_REGION: "{{ route53_failover_state_region }}"
+      when: route53_failover_state_bucket | default('') | length > 0
+
+    - name: "Set bucket availability"
+      ansible.builtin.set_fact:
+        _r53_bucket_available: >-
+          {{ (route53_failover_state_bucket | default('') | length > 0) and
+             (_r53_bucket_check.stdout | default('missing') is search('exists')) }}
+
+    # --- Workspace setup ---
+    - name: "Create working directory"
+      ansible.builtin.file:
+        path: "{{ route53_failover_workdir }}"
+        state: directory
+        mode: '0755'
+      when: _r53_bucket_available
+
+    - name: "Copy terraform files"
+      ansible.builtin.copy:
+        src: "{{ route53_failover_tf_source }}/{{ item }}"
+        dest: "{{ route53_failover_workdir }}/{{ item }}"
+        mode: '0644'
+      loop:
+        - main.tf
+        - variables.tf
+        - outputs.tf
+        - providers.tf
+      when: _r53_bucket_available
+
+    - name: "Generate backend.tf"
+      ansible.builtin.template:
+        src: backend.tf.j2
+        dest: "{{ route53_failover_workdir }}/backend.tf"
+        mode: '0644'
+      when: _r53_bucket_available
+
+    - name: "Generate terraform.tfvars"
+      ansible.builtin.template:
+        src: terraform.tfvars.j2
+        dest: "{{ route53_failover_workdir }}/terraform.tfvars"
+        mode: '0600'
+      when: _r53_bucket_available
+
+    - name: "Build terraform container command"
+      ansible.builtin.set_fact:
+        _r53_tf_cmd: >-
+          {{ route53_failover_container_runtime }} run --rm
+          -v {{ route53_failover_workdir }}:/workspace:Z
+          -w /workspace
+          -e AWS_ACCESS_KEY_ID={{ _r53_aws_creds.ak }}
+          -e AWS_SECRET_ACCESS_KEY={{ _r53_aws_creds.sk }}
+          {% if _r53_aws_creds.st %}-e AWS_SESSION_TOKEN={{ _r53_aws_creds.st }}{% endif %}
+          -e AWS_REGION={{ route53_failover_state_region }}
+          -e AWS_DEFAULT_REGION={{ route53_failover_state_region }}
+          {{ route53_failover_image }}
+      when: _r53_bucket_available
+
+    # --- Init ---
+    - name: "Terraform init"
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - "{{ _r53_tf_cmd }} terraform init -upgrade -reconfigure -no-color"
+      register: _r53_tf_init
+      changed_when: "'Terraform has been successfully initialized' in _r53_tf_init.stdout"
+      when: _r53_bucket_available
+
+    # --- Import existing hosted zone if needed ---
+    - name: "Check terraform state for hosted zone"
+      ansible.builtin.shell: "{{ _r53_tf_cmd }} terraform state list 2>/dev/null"
+      register: _r53_state_list
+      changed_when: false
+      failed_when: false
+      when: _r53_bucket_available
+
+    - name: "Look up existing hosted zone"
+      ansible.builtin.shell: |
+        aws route53 list-hosted-zones-by-name \
+          --dns-name "{{ route53_failover_domain }}" \
+          --max-items 1 \
+          --query "HostedZones[?Name=='{{ route53_failover_domain }}.'].Id" \
+          --output text 2>/dev/null | sed 's|/hostedzone/||'
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ _r53_aws_creds.ak }}"
+        AWS_SECRET_ACCESS_KEY: "{{ _r53_aws_creds.sk }}"
+        AWS_SESSION_TOKEN: "{{ _r53_aws_creds.st }}"
+        AWS_REGION: "{{ route53_failover_state_region }}"
+      register: _r53_existing_zone
+      changed_when: false
+      failed_when: false
+      when:
+        - _r53_bucket_available
+        - route53_failover_create_hosted_zone
+        - "'aws_route53_zone.dr' not in (_r53_state_list.stdout | default(''))"
+
+    - name: "Import existing hosted zone"
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - "{{ _r53_tf_cmd }} terraform import -no-color 'aws_route53_zone.dr[0]' {{ _r53_existing_zone.stdout | trim }}"
+      changed_when: true
+      when:
+        - _r53_bucket_available
+        - route53_failover_create_hosted_zone
+        - "'aws_route53_zone.dr' not in (_r53_state_list.stdout | default(''))"
+        - _r53_existing_zone.stdout | default('') | trim not in ['', 'None']
+
+    # --- Plan ---
+    - name: "Terraform plan"
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - "{{ _r53_tf_cmd }} terraform plan -out=tfplan -input=false -no-color"
+      register: _r53_tf_plan
+      changed_when: false
+      when:
+        - _r53_bucket_available
+        - not (route53_failover_destroy | default(false))
+
+    # --- Destroy plan ---
+    - name: "Terraform destroy plan"
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - "{{ _r53_tf_cmd }} terraform plan -destroy -out=tfplan-destroy -input=false -no-color"
+      changed_when: false
+      when:
+        - _r53_bucket_available
+        - route53_failover_destroy | default(false)
+
+    # --- Prepare-only: export for parallel apply ---
+    - name: "Export prepared state"
+      ansible.builtin.set_fact:
+        route53_failover_prepared:
+          skipped: false
+          tf_cmd: "{{ _r53_tf_cmd }}"
+          apply_cmd: >-
+            {{ _r53_tf_cmd }} terraform apply -auto-approve -no-color
+            {{ 'tfplan-destroy' if (route53_failover_destroy | default(false)) else 'tfplan' }}
+          output_cmd: "{{ _r53_tf_cmd }} terraform output -json -no-color"
+      when:
+        - _r53_bucket_available
+        - route53_failover_prepare_only | default(false)
+
+    # --- Full mode: Apply ---
+    - name: "Terraform apply"
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - "{{ _r53_tf_cmd }} terraform apply -auto-approve -no-color tfplan"
+      register: _r53_apply
+      changed_when: true
+      when:
+        - _r53_bucket_available
+        - not (route53_failover_prepare_only | default(false))
+        - not (route53_failover_destroy | default(false))
+
+    - name: "Get outputs"
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - "{{ _r53_tf_cmd }} terraform output -json -no-color"
+      register: _r53_outputs_raw
+      changed_when: false
+      when:
+        - _r53_bucket_available
+        - not (route53_failover_prepare_only | default(false))
+        - not (route53_failover_destroy | default(false))
+
+    - name: "Set output facts"
+      ansible.builtin.set_fact:
+        route53_failover_result:
+          domain: "{{ (_r53_outputs_raw.stdout | from_json).domain.value }}"
+          hosted_zone_id: "{{ (_r53_outputs_raw.stdout | from_json).hosted_zone_id.value }}"
+          name_servers: "{{ (_r53_outputs_raw.stdout | from_json).hosted_zone_name_servers.value | default([]) }}"
+          failover_records: "{{ (_r53_outputs_raw.stdout | from_json).failover_records.value | default({}) }}"
+      when:
+        - _r53_bucket_available
+        - not (route53_failover_prepare_only | default(false))
+        - not (route53_failover_destroy | default(false))
+        - _r53_outputs_raw.stdout is defined
+
+    - name: "Display results"
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Route53 DR Failover - Complete"
+          - "=========================================="
+          - "Domain:     {{ route53_failover_result.domain }}"
+          - "Zone ID:    {{ route53_failover_result.hosted_zone_id }}"
+          - "NS Records: {{ route53_failover_result.name_servers }}"
+          - "Failover:   {{ route53_failover_result.failover_records }}"
+          - ""
+          - "  IMPORTANT: Delegate {{ route53_failover_domain }} from your"
+          - "  parent zone to the NS records above."
+          - "=========================================="
+      when:
+        - route53_failover_result is defined
+        - not (route53_failover_destroy | default(false))
+
+    # --- Full mode: Destroy ---
+    - name: "Terraform destroy"
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - "{{ _r53_tf_cmd }} terraform apply -auto-approve -no-color tfplan-destroy"
+      changed_when: true
+      when:
+        - _r53_bucket_available
+        - not (route53_failover_prepare_only | default(false))
+        - route53_failover_destroy | default(false)
+
+    - name: "Display destroy completion"
+      ansible.builtin.debug:
+        msg: "Route53 DR failover resources destroyed for {{ route53_failover_domain }}"
+      when:
+        - route53_failover_destroy | default(false)
+        - not (route53_failover_prepare_only | default(false))
