@@ -79,6 +79,27 @@ fsx_ontap_terraform_root_volume_security_style: "UNIX"
 fsx_ontap_terraform_create_secrets: true
 
 # -----------------------------------------------------------------------------
+# Route53 DR Failover
+# -----------------------------------------------------------------------------
+# Set dr_failover_domain to enable Route53 DNS failover for protected apps.
+# During failover, Route53 automatically routes traffic to the healthy cluster.
+# Leave empty to skip Route53 setup entirely.
+#
+# If you own the parent zone in Route53, set dr_failover_hosted_zone_id to
+# skip hosted zone creation and use your existing zone. Otherwise a new zone
+# is created and you must delegate the NS records from your parent zone.
+dr_failover_domain: ""
+# dr_failover_hosted_zone_id: ""
+
+# Apps that get failover records (must match drFailover.apps in values-global.yaml)
+dr_failover_apps:
+  - name: boutique
+  - name: wordpress
+
+# Health check path hit by Route53 against each cluster's ingress router
+dr_failover_health_check_path: "/"
+
+# -----------------------------------------------------------------------------
 # Tags
 # -----------------------------------------------------------------------------
 resource_tags:

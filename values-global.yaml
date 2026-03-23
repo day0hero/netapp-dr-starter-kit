@@ -22,6 +22,22 @@ tridentProtect:
       namespaces:
         - name: wordpress
 
+# Route53 DR Failover — populated by `make build-dr` when dr_failover_domain is set
+drFailover:
+  enabled: false
+  domain: ""
+  apps:
+    - name: boutique
+      routeName: frontend-dr
+      namespace: boutique
+      serviceName: frontend
+      servicePort: http
+    - name: wordpress
+      routeName: wordpress-dr
+      namespace: wordpress
+      serviceName: wordpress
+      servicePort: http
+
 main:
   clusterGroupName: hub
   multiSourceConfig:

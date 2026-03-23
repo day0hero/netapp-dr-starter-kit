@@ -413,7 +413,85 @@
           - "=========================================="
 
 # -----------------------------------------------------------------------------
-# Play 8: Summary
+# Play 8: Route53 DR Failover (optional — only when dr_failover_domain is set)
+# -----------------------------------------------------------------------------
+- name: Configure Route53 DR Failover
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _project_root: "{{ playbook_dir }}/.."
+  tasks:
+    - name: Skip Route53 if destroying
+      ansible.builtin.meta: end_play
+      when: destroy_resources | default(false)
+
+    - name: Skip Route53 if domain not configured
+      ansible.builtin.meta: end_play
+      when: dr_failover_domain | default('') == ''
+
+    - name: Discover primary cluster ingress hostname
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ prod_kubeconfig }}" oc get ingress.config cluster
+        -o jsonpath='{.spec.domain}'
+      register: _prod_ingress_domain
+      changed_when: false
+
+    - name: Discover secondary cluster ingress hostname
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ dr_kubeconfig }}" oc get ingress.config cluster
+        -o jsonpath='{.spec.domain}'
+      register: _dr_ingress_domain
+      changed_when: false
+
+    - name: Set ingress hostnames
+      ansible.builtin.set_fact:
+        _prod_router_hostname: "router-default.{{ _prod_ingress_domain.stdout }}"
+        _dr_router_hostname: "router-default.{{ _dr_ingress_domain.stdout }}"
+
+    - name: Deploy Route53 failover via Terraform
+      ansible.builtin.include_role:
+        name: route53_failover_terraform
+      vars:
+        route53_failover_domain: "{{ dr_failover_domain }}"
+        route53_failover_create_hosted_zone: "{{ not (dr_failover_hosted_zone_id | default('') | length > 0) }}"
+        route53_failover_hosted_zone_id: "{{ dr_failover_hosted_zone_id | default('') }}"
+        route53_failover_state_bucket: "{{ terraform_state_bucket }}"
+        route53_failover_state_region: "{{ prod_cluster.region }}"
+        route53_failover_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        route53_failover_primary_ingress_hostname: "{{ _prod_router_hostname }}"
+        route53_failover_secondary_ingress_hostname: "{{ _dr_router_hostname }}"
+        route53_failover_primary_health_fqdn: "{{ _prod_router_hostname }}"
+        route53_failover_secondary_health_fqdn: "{{ _dr_router_hostname }}"
+        route53_failover_apps: "{{ dr_failover_apps | default([]) }}"
+        route53_failover_health_check_path: "{{ dr_failover_health_check_path | default('/') }}"
+        route53_failover_tags: "{{ resource_tags }}"
+
+    - name: Enable drFailover in values-global.yaml
+      ansible.builtin.shell: |
+        yq -i '.drFailover.enabled = true' {{ _project_root }}/values-global.yaml
+        yq -i '.drFailover.domain = "{{ dr_failover_domain }}"' {{ _project_root }}/values-global.yaml
+      changed_when: true
+
+    - name: Display Route53 failover summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Route53 DR Failover Configured"
+          - "=========================================="
+          - "  Domain: {{ dr_failover_domain }}"
+          - "  Primary router:   {{ _prod_router_hostname }}"
+          - "  Secondary router: {{ _dr_router_hostname }}"
+          - ""
+          - "  Failover URLs:"
+          - "  {% for app in dr_failover_apps | default([]) %}  {{ app.name }}.{{ dr_failover_domain }}{% endfor %}"
+          - ""
+          - "  Ensure DNS delegation is configured for"
+          - "  {{ dr_failover_domain }} in your parent zone."
+          - "=========================================="
+      when: route53_failover_result is defined
+
+# -----------------------------------------------------------------------------
+# Play 9: Summary
 # -----------------------------------------------------------------------------
 - name: DR Infrastructure Summary
   hosts: localhost
@@ -1118,6 +1196,55 @@
           - "  Production: {{ _prod_fsx_prepared.file_system_name }}"
           - "  DR:         {{ _dr_fsx_prepared.file_system_name }}"
           - "=========================================="
+
+# -----------------------------------------------------------------------------
+# Destroy: Route53 DR Failover
+# -----------------------------------------------------------------------------
+- name: Destroy Route53 DR Failover
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Skip if not destroying
+      ansible.builtin.meta: end_play
+      when: not (destroy_resources | default(false))
+
+    - name: Skip if no failover domain configured
+      ansible.builtin.meta: end_play
+      when: dr_failover_domain | default('') == ''
+
+    - name: Discover primary cluster ingress hostname
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ prod_kubeconfig }}" oc get ingress.config cluster
+        -o jsonpath='{.spec.domain}'
+      register: _prod_ingress_domain_destroy
+      changed_when: false
+      failed_when: false
+
+    - name: Discover secondary cluster ingress hostname
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ dr_kubeconfig }}" oc get ingress.config cluster
+        -o jsonpath='{.spec.domain}'
+      register: _dr_ingress_domain_destroy
+      changed_when: false
+      failed_when: false
+
+    - name: Destroy Route53 failover via Terraform
+      ansible.builtin.include_role:
+        name: route53_failover_terraform
+      vars:
+        route53_failover_domain: "{{ dr_failover_domain }}"
+        route53_failover_create_hosted_zone: "{{ not (dr_failover_hosted_zone_id | default('') | length > 0) }}"
+        route53_failover_hosted_zone_id: "{{ dr_failover_hosted_zone_id | default('') }}"
+        route53_failover_state_bucket: "{{ terraform_state_bucket }}"
+        route53_failover_state_region: "{{ prod_cluster.region }}"
+        route53_failover_state_dynamodb_table: "{{ terraform_state_dynamodb_table }}"
+        route53_failover_primary_ingress_hostname: "router-default.{{ _prod_ingress_domain_destroy.stdout | default('placeholder.example.com') }}"
+        route53_failover_secondary_ingress_hostname: "router-default.{{ _dr_ingress_domain_destroy.stdout | default('placeholder.example.com') }}"
+        route53_failover_primary_health_fqdn: "router-default.{{ _prod_ingress_domain_destroy.stdout | default('placeholder.example.com') }}"
+        route53_failover_secondary_health_fqdn: "router-default.{{ _dr_ingress_domain_destroy.stdout | default('placeholder.example.com') }}"
+        route53_failover_apps: "{{ dr_failover_apps | default([]) }}"
+        route53_failover_tags: "{{ resource_tags }}"
+        route53_failover_destroy: true
 
 - name: Destroy VPC Peering
   hosts: localhost

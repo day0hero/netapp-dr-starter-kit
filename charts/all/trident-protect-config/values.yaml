@@ -113,3 +113,24 @@ tridentProtect:
 
   # On-demand backups (typically not used in GitOps - use schedules instead)
   backups: []
+
+# Route53 DR Failover Routes
+# When enabled, creates OpenShift Routes in each app namespace with the
+# DR failover domain hostname (e.g. boutique.dr.example.com). Route53
+# points these hostnames to the active cluster's ingress.
+drFailover:
+  enabled: false
+  domain: ""
+  apps: []
+  # Example:
+  # apps:
+  #   - name: boutique
+  #     routeName: frontend-dr
+  #     namespace: boutique
+  #     serviceName: frontend
+  #     servicePort: http
+  #   - name: wordpress
+  #     routeName: wordpress-dr
+  #     namespace: wordpress
+  #     serviceName: wordpress
+  #     servicePort: http
