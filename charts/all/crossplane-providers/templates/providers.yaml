@@ -6,6 +6,6 @@ metadata:
   name: upbound-{{ .name }}
 spec:
   package: "{{ .package }}:{{ $.Values.crossplane.providers.version }}"
-  controllerConfigRef:
-    name: aws-controller-config
+  runtimeConfigRef:
+    name: aws-runtime-config
 {{- end }}

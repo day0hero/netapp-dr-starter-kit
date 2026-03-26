@@ -1,7 +1,11 @@
-apiVersion: pkg.crossplane.io/v1alpha1
-kind: ControllerConfig
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
 metadata:
-  name: aws-controller-config
+  name: aws-runtime-config
 spec:
-  podSecurityContext:
-    runAsNonRoot: true
+  deploymentTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
