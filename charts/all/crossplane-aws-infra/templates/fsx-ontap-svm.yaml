@@ -10,9 +10,8 @@ metadata:
 spec:
   forProvider:
     region: {{ $inst.region }}
-    fileSystemIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $inst.name }}
+    fileSystemIdRef:
+      name: {{ $inst.name }}
     name: {{ $inst.svmName }}
     rootVolumeSecurityStyle: {{ $inst.rootVolumeSecurityStyle }}
     svmAdminPasswordSecretRef:

@@ -28,9 +28,8 @@ spec:
       - {{ . | quote }}
       {{- end }}
     description: {{ $rule.desc }}
-    securityGroupIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $sgName }}
+    securityGroupIdRef:
+      name: {{ $sgName }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}
@@ -50,9 +49,8 @@ spec:
     cidrBlocks:
       - "0.0.0.0/0"
     description: Allow all outbound traffic
-    securityGroupIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $sgName }}
+    securityGroupIdRef:
+      name: {{ $sgName }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
 

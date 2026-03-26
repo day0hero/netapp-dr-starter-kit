@@ -37,9 +37,8 @@ metadata:
 spec:
   forProvider:
     region: {{ $dr.region }}
-    vpcPeeringConnectionIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    vpcPeeringConnectionIdRef:
+      name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
     autoAccept: true
     tags:
       Name: {{ $dr.clusterName }}-to-{{ $prod.clusterName }}
@@ -59,9 +58,8 @@ metadata:
 spec:
   forProvider:
     region: {{ $prod.region }}
-    vpcPeeringConnectionIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    vpcPeeringConnectionIdRef:
+      name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
     requester:
       - allowRemoteVpcDnsResolution: true
   providerConfigRef:
@@ -75,9 +73,8 @@ metadata:
 spec:
   forProvider:
     region: {{ $dr.region }}
-    vpcPeeringConnectionIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    vpcPeeringConnectionIdRef:
+      name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
     accepter:
       - allowRemoteVpcDnsResolution: true
   providerConfigRef:
@@ -96,9 +93,8 @@ spec:
     region: {{ $prod.region }}
     routeTableId: {{ $rtId | quote }}
     destinationCidrBlock: {{ $dr.vpcCidr | quote }}
-    vpcPeeringConnectionIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    vpcPeeringConnectionIdRef:
+      name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}
@@ -115,9 +111,8 @@ spec:
     region: {{ $dr.region }}
     routeTableId: {{ $rtId | quote }}
     destinationCidrBlock: {{ $prod.vpcCidr | quote }}
-    vpcPeeringConnectionIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    vpcPeeringConnectionIdRef:
+      name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}

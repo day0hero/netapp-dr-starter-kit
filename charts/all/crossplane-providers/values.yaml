@@ -3,6 +3,8 @@ crossplane:
     version: v2.4.0
     # Sub-providers to install (each auto-pulls provider-family-aws)
     packages:
+      - name: provider-family-aws
+        package: xpkg.upbound.io/upbound/provider-family-aws
       - name: provider-aws-ec2
         package: xpkg.upbound.io/upbound/provider-aws-ec2
       - name: provider-aws-fsx

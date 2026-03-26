@@ -87,9 +87,8 @@ spec:
   forProvider:
     region: {{ $r53.region }}
     {{- if $r53.createHostedZone }}
-    zoneIdSelector:
-      matchLabels:
-        crossplane.io/external-name: dr-{{ $r53.domain | replace "." "-" }}
+    zoneIdRef:
+      name: dr-{{ $r53.domain | replace "." "-" }}
     {{- else }}
     zoneId: {{ $r53.hostedZoneId | quote }}
     {{- end }}
@@ -101,9 +100,8 @@ spec:
       - type: PRIMARY
     records:
       - {{ $r53.primaryIngressHostname | quote }}
-    healthCheckIdSelector:
-      matchLabels:
-        crossplane.io/external-name: dr-primary-cluster
+    healthCheckIdRef:
+      name: dr-primary-cluster
   providerConfigRef:
     name: {{ $providerConfigRef }}
 ---
@@ -117,9 +115,8 @@ spec:
   forProvider:
     region: {{ $r53.region }}
     {{- if $r53.createHostedZone }}
-    zoneIdSelector:
-      matchLabels:
-        crossplane.io/external-name: dr-{{ $r53.domain | replace "." "-" }}
+    zoneIdRef:
+      name: dr-{{ $r53.domain | replace "." "-" }}
     {{- else }}
     zoneId: {{ $r53.hostedZoneId | quote }}
     {{- end }}
@@ -131,9 +128,8 @@ spec:
       - type: SECONDARY
     records:
       - {{ $r53.secondaryIngressHostname | quote }}
-    healthCheckIdSelector:
-      matchLabels:
-        crossplane.io/external-name: dr-secondary-cluster
+    healthCheckIdRef:
+      name: dr-secondary-cluster
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}

@@ -25,9 +25,8 @@ metadata:
 spec:
   forProvider:
     region: {{ .Values.s3AppVault.region }}
-    bucketSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ .Values.s3AppVault.bucketName }}
+    bucketRef:
+      name: {{ .Values.s3AppVault.bucketName }}
     versioningConfiguration:
       - status: Enabled
   {{- include "crossplane-aws-infra.providerConfigRef" . | nindent 2 }}
@@ -40,9 +39,8 @@ metadata:
 spec:
   forProvider:
     region: {{ .Values.s3AppVault.region }}
-    bucketSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ .Values.s3AppVault.bucketName }}
+    bucketRef:
+      name: {{ .Values.s3AppVault.bucketName }}
     rule:
       - applyServerSideEncryptionByDefault:
           - sseAlgorithm: AES256
@@ -57,9 +55,8 @@ metadata:
 spec:
   forProvider:
     region: {{ .Values.s3AppVault.region }}
-    bucketSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ .Values.s3AppVault.bucketName }}
+    bucketRef:
+      name: {{ .Values.s3AppVault.bucketName }}
     blockPublicAcls: true
     blockPublicPolicy: true
     ignorePublicAcls: true

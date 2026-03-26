@@ -25,9 +25,8 @@ spec:
       - {{ . | quote }}
       {{- end }}
     {{- end }}
-    securityGroupIdSelector:
-      matchLabels:
-        crossplane.io/external-name: {{ $inst.name }}-sg
+    securityGroupIdRefs:
+      - name: {{ $inst.name }}-sg
     fsxAdminPasswordSecretRef:
       name: {{ $.Values.fsxOntap.passwordSecret.name }}
       namespace: {{ $.Values.fsxOntap.passwordSecret.namespace }}
