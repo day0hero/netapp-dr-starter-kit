@@ -98,11 +98,6 @@ clusterGroup:
     wordpress:
   # The only subscription on spokes is gitops which gets managed by ACM
   subscriptions:
-    crossplane:
-      name: crossplane-operator
-      namespace: crossplane-system
-      channel: stable
-      source: community-operators
     trident:
       name: trident-operator
       namespace: openshift-operators
@@ -120,6 +115,13 @@ clusterGroup:
       argoProject: eso
       chart: golang-external-secrets
       chartVersion: 0.2.*
+    crossplane:
+      name: crossplane
+      namespace: crossplane-system
+      argoProject: crossplane
+      chart: crossplane
+      repoURL: https://charts.crossplane.io/stable
+      chartVersion: 2.2.*
     crossplane-providers:
       name: crossplane-providers
       namespace: crossplane-system

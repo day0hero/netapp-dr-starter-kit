@@ -111,11 +111,6 @@ clusterGroup:
       namespace: open-cluster-management
       channel: release-2.15
       # csv: advanced-cluster-management.v2.6.1
-    crossplane:
-      name: crossplane-operator
-      namespace: crossplane-system
-      channel: stable
-      source: community-operators
     trident:
       name: trident-operator
       namespace: openshift-operators
@@ -166,6 +161,13 @@ clusterGroup:
       argoProject: hub
       chart: golang-external-secrets
       chartVersion: 0.1.*
+    crossplane:
+      name: crossplane
+      namespace: crossplane-system
+      argoProject: crossplane
+      chart: crossplane
+      repoURL: https://charts.crossplane.io/stable
+      chartVersion: 2.2.*
     crossplane-providers:
       name: crossplane-providers
       namespace: crossplane-system
