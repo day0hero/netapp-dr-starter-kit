@@ -165,9 +165,7 @@ clusterGroup:
       name: crossplane
       namespace: crossplane-system
       argoProject: crossplane
-      chart: crossplane
-      repoURL: https://charts.crossplane.io/stable
-      chartVersion: 2.2.*
+      path: charts/all/crossplane
     crossplane-providers:
       name: crossplane-providers
       namespace: crossplane-system
