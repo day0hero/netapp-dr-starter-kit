@@ -334,3 +334,80 @@ clusterGroup:
 #          operator: In
 #          values:
 #            - OpenShift
+
+fsxOntap:
+  enabled: true
+  region: us-west-1
+  fileSystemName: primary-us-west-1-fsx
+  vpcId: vpc-07b4833d24968f823
+  subnetIds:
+    - subnet-0cdb29ca76354ba77
+    - subnet-0af9b778f68ac1002
+  routeTableIds:
+    - rtb-0d3230a63757edd71
+    - rtb-02d7cb5df997b552b
+  preferredSubnetId: subnet-0cdb29ca76354ba77
+  allowedCidrs:
+    - 10.0.0.0/16
+    - 10.100.0.0/16
+  storageCapacity: 1024
+  throughputCapacity: 1024
+  storageType: SSD
+  deploymentType: MULTI_AZ_1
+  svmName: SVM1
+  peer:
+    enabled: true
+    region: us-west-2
+    fileSystemName: secondary-us-west-2-fsx
+    vpcId: vpc-0e2d7a354a6eeb228
+    subnetIds:
+      - subnet-08dc8fc3886c39aa9
+      - subnet-0ae3f2a01ed37ca25
+    routeTableIds:
+      - rtb-0f80fad295fbaef7c
+      - rtb-03170f7fdaabe5d7c
+      - rtb-0e0a6c998ca8b17b7
+      - rtb-0f8d054b229fdb78a
+    preferredSubnetId: subnet-08dc8fc3886c39aa9
+    allowedCidrs:
+      - 10.100.0.0/16
+      - 10.0.0.0/16
+    svmName: SVM2
+s3AppVault:
+  enabled: true
+  bucketName: trident-protect-bucket
+  region: us-west-1
+endpointWatcher:
+  enabled: true
+  local:
+    fileSystemName: primary-us-west-1-fsx
+    region: us-west-1
+    svmName: SVM1
+  peer:
+    fileSystemName: secondary-us-west-2-fsx
+    region: us-west-2
+    svmName: SVM2
+vpcPeering:
+  enabled: true
+  prod:
+    region: us-west-1
+    vpcId: vpc-07b4833d24968f823
+    vpcCidr: 10.0.0.0/16
+    clusterName: primary
+    routeTableIds:
+      - rtb-03408e47a0f1f3aaf
+      - rtb-0d3230a63757edd71
+      - rtb-02d7cb5df997b552b
+      - rtb-0eda66c154c174118
+  dr:
+    region: us-west-2
+    vpcId: vpc-0e2d7a354a6eeb228
+    vpcCidr: 10.100.0.0/16
+    clusterName: secondary
+    routeTableIds:
+      - rtb-0f80fad295fbaef7c
+      - rtb-0c2de929a8e82b349
+      - rtb-00b385f8726057a80
+      - rtb-03170f7fdaabe5d7c
+      - rtb-0e0a6c998ca8b17b7
+      - rtb-0f8d054b229fdb78a

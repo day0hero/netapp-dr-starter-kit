@@ -252,3 +252,22 @@ clusterGroup:
 #          operator: In
 #          values:
 #            - OpenShift
+
+fsxOntap:
+  enabled: false
+s3AppVault:
+  enabled: false
+vpcPeering:
+  enabled: false
+route53Failover:
+  enabled: false
+endpointWatcher:
+  enabled: true
+  local:
+    fileSystemName: secondary-us-west-2-fsx
+    region: us-west-2
+    svmName: SVM2
+  peer:
+    fileSystemName: primary-us-west-1-fsx
+    region: us-west-1
+    svmName: SVM1
