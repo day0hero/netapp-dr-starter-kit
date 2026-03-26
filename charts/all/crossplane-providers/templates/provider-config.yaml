@@ -1,0 +1,11 @@
+apiVersion: aws.upbound.io/v1beta1
+kind: ProviderConfig
+metadata:
+  name: {{ .Values.crossplane.providerConfig.name }}
+spec:
+  credentials:
+    source: Secret
+    secretRef:
+      namespace: {{ .Values.crossplane.providerConfig.credentials.secretNamespace }}
+      name: {{ .Values.crossplane.providerConfig.credentials.secretName }}
+      key: {{ .Values.crossplane.providerConfig.credentials.secretKey }}

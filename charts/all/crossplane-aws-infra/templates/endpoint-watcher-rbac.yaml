@@ -1,0 +1,39 @@
+{{- if .Values.endpointWatcher.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fsx-endpoint-watcher
+  namespace: crossplane-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fsx-endpoint-watcher
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ .Values.crossplane.providerConfig.credentials.secretName | default "aws-provider-creds" | quote }}]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "patch"]
+  - apiGroups: ["trident.netapp.io"]
+    resources: ["tridentbackendconfigs"]
+    verbs: ["get", "list", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fsx-endpoint-watcher
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fsx-endpoint-watcher
+subjects:
+  - kind: ServiceAccount
+    name: fsx-endpoint-watcher
+    namespace: crossplane-system
+{{- end }}

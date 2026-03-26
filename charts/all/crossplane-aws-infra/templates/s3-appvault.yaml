@@ -1,0 +1,68 @@
+{{- if .Values.s3AppVault.enabled }}
+---
+apiVersion: s3.aws.upbound.io/v1beta2
+kind: Bucket
+metadata:
+  name: {{ .Values.s3AppVault.bucketName }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ .Values.s3AppVault.region }}
+    forceDestroy: true
+    tags:
+      Name: {{ .Values.s3AppVault.bucketName }}
+      {{- range $k, $v := .Values.s3AppVault.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  {{- include "crossplane-aws-infra.providerConfigRef" . | nindent 2 }}
+
+---
+apiVersion: s3.aws.upbound.io/v1beta1
+kind: BucketVersioning
+metadata:
+  name: {{ .Values.s3AppVault.bucketName }}-versioning
+spec:
+  forProvider:
+    region: {{ .Values.s3AppVault.region }}
+    bucketSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ .Values.s3AppVault.bucketName }}
+    versioningConfiguration:
+      - status: Enabled
+  {{- include "crossplane-aws-infra.providerConfigRef" . | nindent 2 }}
+
+---
+apiVersion: s3.aws.upbound.io/v1beta1
+kind: BucketServerSideEncryptionConfiguration
+metadata:
+  name: {{ .Values.s3AppVault.bucketName }}-sse
+spec:
+  forProvider:
+    region: {{ .Values.s3AppVault.region }}
+    bucketSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ .Values.s3AppVault.bucketName }}
+    rule:
+      - applyServerSideEncryptionByDefault:
+          - sseAlgorithm: AES256
+        bucketKeyEnabled: true
+  {{- include "crossplane-aws-infra.providerConfigRef" . | nindent 2 }}
+
+---
+apiVersion: s3.aws.upbound.io/v1beta1
+kind: BucketPublicAccessBlock
+metadata:
+  name: {{ .Values.s3AppVault.bucketName }}-public-access
+spec:
+  forProvider:
+    region: {{ .Values.s3AppVault.region }}
+    bucketSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ .Values.s3AppVault.bucketName }}
+    blockPublicAcls: true
+    blockPublicPolicy: true
+    ignorePublicAcls: true
+    restrictPublicBuckets: true
+  {{- include "crossplane-aws-infra.providerConfigRef" . | nindent 2 }}
+{{- end }}

@@ -1,0 +1,125 @@
+{{- if .Values.vpcPeering.enabled }}
+{{- $providerConfigRef := .Values.global.providerConfigRef }}
+{{- $tags := .Values.vpcPeering.tags }}
+{{- $prod := .Values.vpcPeering.prod }}
+{{- $dr := .Values.vpcPeering.dr }}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: VPCPeeringConnection
+metadata:
+  name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $prod.region }}
+    vpcId: {{ $prod.vpcId | quote }}
+    peerVpcId: {{ $dr.vpcId | quote }}
+    peerRegion: {{ $dr.region }}
+    autoAccept: false
+    tags:
+      Name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+      Side: Requester
+      {{- range $k, $v := $tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: VPCPeeringConnectionAccepter
+metadata:
+  name: {{ $dr.clusterName }}-accept-{{ $prod.clusterName }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $dr.region }}
+    vpcPeeringConnectionIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    autoAccept: true
+    tags:
+      Name: {{ $dr.clusterName }}-to-{{ $prod.clusterName }}
+      Side: Accepter
+      {{- range $k, $v := $tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+
+{{- if .Values.vpcPeering.enableDnsResolution }}
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: VPCPeeringConnectionOptions
+metadata:
+  name: {{ $prod.clusterName }}-peering-opts-requester
+spec:
+  forProvider:
+    region: {{ $prod.region }}
+    vpcPeeringConnectionIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    requester:
+      - allowRemoteVpcDnsResolution: true
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: VPCPeeringConnectionOptions
+metadata:
+  name: {{ $dr.clusterName }}-peering-opts-accepter
+spec:
+  forProvider:
+    region: {{ $dr.region }}
+    vpcPeeringConnectionIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+    accepter:
+      - allowRemoteVpcDnsResolution: true
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- end }}
+
+{{/* Routes: Prod VPC -> DR VPC */}}
+{{- range $i, $rtId := $prod.routeTableIds }}
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Route
+metadata:
+  name: prod-to-dr-rt-{{ $i }}
+spec:
+  forProvider:
+    region: {{ $prod.region }}
+    routeTableId: {{ $rtId | quote }}
+    destinationCidrBlock: {{ $dr.vpcCidr | quote }}
+    vpcPeeringConnectionIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- end }}
+
+{{/* Routes: DR VPC -> Prod VPC */}}
+{{- range $i, $rtId := $dr.routeTableIds }}
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: Route
+metadata:
+  name: dr-to-prod-rt-{{ $i }}
+spec:
+  forProvider:
+    region: {{ $dr.region }}
+    routeTableId: {{ $rtId | quote }}
+    destinationCidrBlock: {{ $prod.vpcCidr | quote }}
+    vpcPeeringConnectionIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- end }}
+
+{{- end }}

@@ -38,6 +38,17 @@ drFailover:
       serviceName: wordpress
       servicePort: http
 
+crossplane:
+  providers:
+    version: v2.4.0
+  providerConfig:
+    name: default
+    credentials:
+      secretName: aws-provider-creds
+      secretNamespace: crossplane-system
+      secretKey: credentials
+      fromVault: true
+
 main:
   clusterGroupName: hub
   multiSourceConfig:

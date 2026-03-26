@@ -1,0 +1,11 @@
+{{- range .Values.crossplane.providers.packages }}
+---
+apiVersion: pkg.crossplane.io/v1
+kind: Provider
+metadata:
+  name: upbound-{{ .name }}
+spec:
+  package: "{{ .package }}:{{ $.Values.crossplane.providers.version }}"
+  controllerConfigRef:
+    name: aws-controller-config
+{{- end }}

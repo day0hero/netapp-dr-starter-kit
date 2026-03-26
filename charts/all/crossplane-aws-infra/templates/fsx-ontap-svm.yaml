@@ -1,0 +1,32 @@
+{{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
+{{- range $inst := $instances }}
+---
+apiVersion: fsx.aws.upbound.io/v1beta1
+kind: OntapStorageVirtualMachine
+metadata:
+  name: {{ $inst.name }}-{{ $inst.svmName | lower }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $inst.region }}
+    fileSystemIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $inst.name }}
+    name: {{ $inst.svmName }}
+    rootVolumeSecurityStyle: {{ $inst.rootVolumeSecurityStyle }}
+    svmAdminPasswordSecretRef:
+      name: {{ $.Values.fsxOntap.passwordSecret.name }}
+      namespace: {{ $.Values.fsxOntap.passwordSecret.namespace }}
+      key: {{ $.Values.fsxOntap.passwordSecret.svmAdminKey }}
+    tags:
+      Name: {{ $inst.svmName }}
+      {{- range $k, $v := $inst.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $.Values.global.providerConfigRef }}
+  writeConnectionSecretToRef:
+    name: {{ $inst.name }}-{{ $inst.svmName | lower }}-conn
+    namespace: crossplane-system
+{{- end }}

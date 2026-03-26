@@ -1,0 +1,197 @@
+{{- if .Values.endpointWatcher.enabled }}
+{{- $w := .Values.endpointWatcher }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fsx-endpoint-watcher
+  namespace: crossplane-system
+spec:
+  schedule: {{ $w.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 120
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: fsx-endpoint-watcher
+          containers:
+            - name: watcher
+              image: {{ $w.image }}
+              env:
+                - name: LOCAL_FSX_NAME
+                  value: {{ $w.local.fileSystemName | quote }}
+                - name: LOCAL_REGION
+                  value: {{ $w.local.region | quote }}
+                - name: LOCAL_SVM_NAME
+                  value: {{ $w.local.svmName | quote }}
+                - name: PEER_FSX_NAME
+                  value: {{ $w.peer.fileSystemName | quote }}
+                - name: PEER_REGION
+                  value: {{ $w.peer.region | quote }}
+                - name: PEER_SVM_NAME
+                  value: {{ $w.peer.svmName | quote }}
+                - name: AWS_SHARED_CREDENTIALS_FILE
+                  value: /aws/credentials
+                - name: CLUSTER_ROLE
+                  value: {{ (.Values.clusterGroup).name | default "hub" | quote }}
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+
+                  # Install kubectl
+                  curl -sLo /usr/local/bin/kubectl \
+                    "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" && \
+                    chmod +x /usr/local/bin/kubectl
+
+                  echo "=== FSx Endpoint Watcher ($(date -u +%H:%M:%S)) ==="
+                  echo "  Local: ${LOCAL_FSX_NAME} (${LOCAL_REGION}) SVM=${LOCAL_SVM_NAME}"
+                  echo "  Peer:  ${PEER_FSX_NAME} (${PEER_REGION}) SVM=${PEER_SVM_NAME}"
+                  echo "  Role:  ${CLUSTER_ROLE}"
+
+                  lookup_fsx() {
+                    local fs_name="$1" region="$2" svm_name="$3" prefix="$4"
+
+                    FS_JSON=$(aws fsx describe-file-systems --region "${region}" \
+                      --query "FileSystems[?Tags[?Key=='Name'&&Value=='${fs_name}']]|[0]" \
+                      --output json 2>/dev/null || echo "null")
+
+                    if [ "${FS_JSON}" = "null" ] || [ -z "${FS_JSON}" ]; then
+                      echo "  ${prefix}: FSx '${fs_name}' not found or not ready"
+                      return 1
+                    fi
+
+                    LIFECYCLE=$(echo "${FS_JSON}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Lifecycle',''))" 2>/dev/null)
+                    if [ "${LIFECYCLE}" != "AVAILABLE" ]; then
+                      echo "  ${prefix}: FSx lifecycle=${LIFECYCLE}, waiting..."
+                      return 1
+                    fi
+
+                    FS_ID=$(echo "${FS_JSON}" | python3 -c "import sys,json; print(json.load(sys.stdin)['FileSystemId'])")
+                    CLUSTER_LIF=$(echo "${FS_JSON}" | python3 -c "
+                  import sys,json
+                  d=json.load(sys.stdin)
+                  eps=d.get('OntapConfiguration',{}).get('Endpoints',{})
+                  print(eps.get('Management',{}).get('IpAddresses',[''])[0])")
+
+                    IC_IPS=$(echo "${FS_JSON}" | python3 -c "
+                  import sys,json
+                  d=json.load(sys.stdin)
+                  eps=d.get('OntapConfiguration',{}).get('Endpoints',{})
+                  ips=eps.get('Intercluster',{}).get('IpAddresses',[])
+                  print(json.dumps(ips))")
+
+                    SVM_JSON=$(aws fsx describe-storage-virtual-machines --region "${region}" \
+                      --filters "Name=file-system-id,Values=${FS_ID}" \
+                      --query "StorageVirtualMachines[?Name=='${svm_name}']|[0]" \
+                      --output json 2>/dev/null || echo "null")
+
+                    MGMT_LIF=""
+                    if [ "${SVM_JSON}" != "null" ] && [ -n "${SVM_JSON}" ]; then
+                      MGMT_LIF=$(echo "${SVM_JSON}" | python3 -c "
+                  import sys,json
+                  d=json.load(sys.stdin)
+                  eps=d.get('Endpoints',{})
+                  print(eps.get('Management',{}).get('IpAddresses',[''])[0])" 2>/dev/null)
+                    fi
+
+                    echo "  ${prefix}: clusterLIF=${CLUSTER_LIF} mgmtLIF=${MGMT_LIF} IC=${IC_IPS}"
+
+                    eval "${prefix}_CLUSTER_LIF='${CLUSTER_LIF}'"
+                    eval "${prefix}_MGMT_LIF='${MGMT_LIF}'"
+                    eval "${prefix}_IC_IPS='${IC_IPS}'"
+                    eval "${prefix}_SVM='${svm_name}'"
+                    return 0
+                  }
+
+                  LOCAL_OK=false
+                  PEER_OK=false
+
+                  if lookup_fsx "${LOCAL_FSX_NAME}" "${LOCAL_REGION}" "${LOCAL_SVM_NAME}" "LOCAL"; then
+                    LOCAL_OK=true
+                  fi
+
+                  if lookup_fsx "${PEER_FSX_NAME}" "${PEER_REGION}" "${PEER_SVM_NAME}" "PEER"; then
+                    PEER_OK=true
+                  fi
+
+                  if [ "${LOCAL_OK}" != "true" ]; then
+                    echo "Local FSx not ready — will retry next schedule"
+                    exit 0
+                  fi
+
+                  echo ""
+                  echo "--- Creating ConfigMaps ---"
+
+                  CONFIGMAP_DATA="
+                  apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: fsx-endpoints
+                    namespace: trident-protect
+                  data:
+                    LOCAL_CLUSTER_LIF: \"${LOCAL_CLUSTER_LIF}\"
+                    LOCAL_MGMT_LIF: \"${LOCAL_MGMT_LIF}\"
+                    LOCAL_SVM: \"${LOCAL_SVM}\"
+                    LOCAL_IC_IPS: '${LOCAL_IC_IPS}'
+                    PEER_CLUSTER_LIF: \"${PEER_CLUSTER_LIF:-}\"
+                    PEER_MGMT_LIF: \"${PEER_MGMT_LIF:-}\"
+                    PEER_SVM: \"${PEER_SVM:-}\"
+                    PEER_IC_IPS: '${PEER_IC_IPS:-[]}'
+                  "
+                  echo "${CONFIGMAP_DATA}" | kubectl apply -f -
+
+                  kubectl apply -f - <<EOCM
+                  apiVersion: v1
+                  kind: ConfigMap
+                  metadata:
+                    name: fsx-endpoints
+                    namespace: trident
+                  data:
+                    LOCAL_CLUSTER_LIF: "${LOCAL_CLUSTER_LIF}"
+                    LOCAL_MGMT_LIF: "${LOCAL_MGMT_LIF}"
+                    LOCAL_SVM: "${LOCAL_SVM}"
+                    LOCAL_IC_IPS: '${LOCAL_IC_IPS}'
+                    PEER_CLUSTER_LIF: "${PEER_CLUSTER_LIF:-}"
+                    PEER_MGMT_LIF: "${PEER_MGMT_LIF:-}"
+                    PEER_SVM: "${PEER_SVM:-}"
+                    PEER_IC_IPS: '${PEER_IC_IPS:-[]}'
+                  EOCM
+
+                  echo ""
+                  echo "--- Patching TridentBackendConfigs ---"
+
+                  BACKENDS=$(kubectl get tridentbackendconfig -n trident -o name 2>/dev/null || true)
+                  if [ -n "${BACKENDS}" ]; then
+                    for TBC in ${BACKENDS}; do
+                      echo "  Patching ${TBC}..."
+                      PATCH="{\"spec\":{\"managementLIF\":\"${LOCAL_MGMT_LIF}\",\"svm\":\"${LOCAL_SVM}\""
+                      if [ "${PEER_OK}" = "true" ]; then
+                        PATCH="${PATCH},\"replication\":{\"isReplicationEnabled\":true,\"remoteSVMName\":\"${PEER_SVM}\"}"
+                      fi
+                      PATCH="${PATCH}}}"
+                      kubectl patch "${TBC}" -n trident --type merge -p "${PATCH}" 2>/dev/null || \
+                        echo "    (not ready yet — will retry)"
+                    done
+                  else
+                    echo "  No TridentBackendConfigs found yet — will retry"
+                  fi
+
+                  echo ""
+                  echo "=== Watcher complete ==="
+              volumeMounts:
+                - name: aws-creds
+                  mountPath: /aws
+                  readOnly: true
+          volumes:
+            - name: aws-creds
+              secret:
+                secretName: {{ .Values.crossplane.providerConfig.credentials.secretName | default "aws-provider-creds" }}
+                items:
+                  - key: {{ .Values.crossplane.providerConfig.credentials.secretKey | default "credentials" }}
+                    path: credentials
+{{- end }}

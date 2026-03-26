@@ -1,0 +1,141 @@
+{{- if .Values.route53Failover.enabled }}
+{{- $providerConfigRef := .Values.global.providerConfigRef }}
+{{- $r53 := .Values.route53Failover }}
+
+{{/* Hosted Zone */}}
+{{- if $r53.createHostedZone }}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: Zone
+metadata:
+  name: dr-{{ $r53.domain | replace "." "-" }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $r53.region }}
+    name: {{ $r53.domain }}
+    tags:
+      Name: {{ $r53.domain }}
+      {{- range $k, $v := $r53.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- end }}
+
+{{/* Health Check - Primary Cluster */}}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: HealthCheck
+metadata:
+  name: dr-primary-cluster
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $r53.region }}
+    fqdn: {{ $r53.primaryHealthCheckFqdn | quote }}
+    port: 443
+    type: HTTPS
+    resourcePath: {{ $r53.healthCheckPath | quote }}
+    failureThreshold: 3
+    requestInterval: 30
+    tags:
+      Name: dr-primary-cluster
+      {{- range $k, $v := $r53.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+
+{{/* Health Check - Secondary Cluster */}}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: HealthCheck
+metadata:
+  name: dr-secondary-cluster
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $r53.region }}
+    fqdn: {{ $r53.secondaryHealthCheckFqdn | quote }}
+    port: 443
+    type: HTTPS
+    resourcePath: {{ $r53.healthCheckPath | quote }}
+    failureThreshold: 3
+    requestInterval: 30
+    tags:
+      Name: dr-secondary-cluster
+      {{- range $k, $v := $r53.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+
+{{/* Failover records for each app -- PRIMARY + SECONDARY */}}
+{{- range $app := $r53.apps }}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: Record
+metadata:
+  name: {{ $app.name }}-primary
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $r53.region }}
+    {{- if $r53.createHostedZone }}
+    zoneIdSelector:
+      matchLabels:
+        crossplane.io/external-name: dr-{{ $r53.domain | replace "." "-" }}
+    {{- else }}
+    zoneId: {{ $r53.hostedZoneId | quote }}
+    {{- end }}
+    name: {{ $app.name }}.{{ $r53.domain }}
+    type: CNAME
+    ttl: {{ $r53.recordTtl }}
+    setIdentifier: {{ $app.name }}-primary
+    failoverRoutingPolicy:
+      - type: PRIMARY
+    records:
+      - {{ $r53.primaryIngressHostname | quote }}
+    healthCheckIdSelector:
+      matchLabels:
+        crossplane.io/external-name: dr-primary-cluster
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: Record
+metadata:
+  name: {{ $app.name }}-secondary
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $r53.region }}
+    {{- if $r53.createHostedZone }}
+    zoneIdSelector:
+      matchLabels:
+        crossplane.io/external-name: dr-{{ $r53.domain | replace "." "-" }}
+    {{- else }}
+    zoneId: {{ $r53.hostedZoneId | quote }}
+    {{- end }}
+    name: {{ $app.name }}.{{ $r53.domain }}
+    type: CNAME
+    ttl: {{ $r53.recordTtl }}
+    setIdentifier: {{ $app.name }}-secondary
+    failoverRoutingPolicy:
+      - type: SECONDARY
+    records:
+      - {{ $r53.secondaryIngressHostname | quote }}
+    healthCheckIdSelector:
+      matchLabels:
+        crossplane.io/external-name: dr-secondary-cluster
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- end }}
+
+{{- end }}

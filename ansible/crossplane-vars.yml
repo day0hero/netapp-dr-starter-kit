@@ -1,0 +1,75 @@
+---
+# =============================================================================
+# Crossplane DR Setup Variables
+# =============================================================================
+#
+# This file provides defaults for the Crossplane-based DR infrastructure.
+# Values are auto-detected from the clusters when possible.
+# Override any value via -e on the command line or by editing this file.
+#
+# Usage:
+#   make crossplane-setup PROD_KUBECONFIG=~/prod-kubeconfig DR_KUBECONFIG=~/dr-kubeconfig
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Cluster Kubeconfigs (REQUIRED - pass via Make/command line)
+# -----------------------------------------------------------------------------
+# prod_kubeconfig: "/path/to/prod/kubeconfig"
+# dr_kubeconfig: "/path/to/dr/kubeconfig"
+
+# -----------------------------------------------------------------------------
+# Cluster Overrides (optional - auto-detected from kubeconfigs if not set)
+# -----------------------------------------------------------------------------
+# prod_cluster_name_override: ""
+# prod_region_override: ""
+# prod_vpc_cidr_override: ""
+# prod_vpc_name_override: ""
+
+# dr_cluster_name_override: ""
+# dr_region_override: ""
+# dr_vpc_cidr_override: ""
+# dr_vpc_name_override: ""
+
+# -----------------------------------------------------------------------------
+# FSx ONTAP Configuration
+# -----------------------------------------------------------------------------
+# File system names default to: <cluster_name>-<region>-fsx
+# prod_file_system_name: ""
+# dr_file_system_name: ""
+
+fsx_storage_capacity: 1024
+fsx_throughput_capacity: 1024
+fsx_storage_type: "SSD"
+fsx_deployment_type: "MULTI_AZ_1"
+
+# SVM Configuration
+# Production gets SVM1, DR gets SVM2 (set automatically by the playbook)
+
+# -----------------------------------------------------------------------------
+# S3 AppVault
+# -----------------------------------------------------------------------------
+# Bucket name and region are read from values-global.yaml automatically.
+# Override here if needed:
+# appvault_bucket_name: ""
+# appvault_region: ""
+
+# -----------------------------------------------------------------------------
+# Route53 DR Failover (optional)
+# -----------------------------------------------------------------------------
+# Set dr_failover_domain to enable Route53 DNS failover for protected apps.
+dr_failover_domain: ""
+# dr_failover_hosted_zone_id: ""
+
+dr_failover_apps:
+  - name: boutique
+  - name: wordpress
+
+dr_failover_health_check_path: "/"
+
+# -----------------------------------------------------------------------------
+# VPC Peering
+# -----------------------------------------------------------------------------
+# Enabled automatically since prod and DR are in different regions/VPCs.
+# Set to false to skip:
+# vpc_peering_enabled: true

@@ -1,0 +1,59 @@
+{{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
+{{- $rules := include "crossplane-aws-infra.sgRules" . | fromYamlArray }}
+{{- $providerConfigRef := .Values.global.providerConfigRef }}
+
+{{- range $inst := $instances }}
+{{- $sgName := printf "%s-sg" $inst.name }}
+
+{{- range $rule := $rules }}
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: SecurityGroupRule
+metadata:
+  name: {{ $sgName }}-{{ $rule.name }}
+spec:
+  forProvider:
+    region: {{ $inst.region }}
+    type: ingress
+    {{- if eq $rule.protocol "icmp" }}
+    fromPort: -1
+    toPort: -1
+    {{- else }}
+    fromPort: {{ $rule.from }}
+    toPort: {{ $rule.to }}
+    {{- end }}
+    protocol: {{ $rule.protocol }}
+    cidrBlocks:
+      {{- range $inst.allowedCidrs }}
+      - {{ . | quote }}
+      {{- end }}
+    description: {{ $rule.desc }}
+    securityGroupIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $sgName }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- end }}
+
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: SecurityGroupRule
+metadata:
+  name: {{ $sgName }}-egress-all
+spec:
+  forProvider:
+    region: {{ $inst.region }}
+    type: egress
+    fromPort: 0
+    toPort: 0
+    protocol: "-1"
+    cidrBlocks:
+      - "0.0.0.0/0"
+    description: Allow all outbound traffic
+    securityGroupIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $sgName }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+
+{{- end }}

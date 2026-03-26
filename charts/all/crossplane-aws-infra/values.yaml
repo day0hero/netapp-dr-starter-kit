@@ -1,0 +1,132 @@
+global:
+  providerConfigRef: default
+
+# ---------------------------------------------------------------------------
+# FSx for NetApp ONTAP
+# ---------------------------------------------------------------------------
+# Hub creates both local + peer FSx filesystems (hub-centric Crossplane model).
+# Secondary sets enabled: false (hub manages its FSx).
+fsxOntap:
+  enabled: true
+  region: us-west-1
+  fileSystemName: ""
+  storageCapacity: 1024
+  throughputCapacity: 1024
+  storageType: SSD
+  deploymentType: MULTI_AZ_1
+  weeklyMaintenanceStartTime: "7:01:00"
+  automaticBackupRetentionDays: 3
+  dailyAutomaticBackupStartTime: "01:00"
+
+  vpcId: ""
+  subnetIds: []
+  routeTableIds: []
+  preferredSubnetId: ""
+  allowedCidrs:
+    - "10.0.0.0/16"
+
+  svmName: SVM1
+  rootVolumeSecurityStyle: UNIX
+
+  passwordSecret:
+    name: fsx-credentials
+    namespace: crossplane-system
+    fsxAdminKey: fsx-admin-password
+    svmAdminKey: svm-admin-password
+
+  secretsManager:
+    enabled: true
+
+  tags:
+    Environment: production
+    ManagedBy: Crossplane
+    Purpose: NetApp-DR
+
+  # Peer FSx (created by the hub for the DR cluster)
+  peer:
+    enabled: false
+    region: ""
+    fileSystemName: ""
+    vpcId: ""
+    subnetIds: []
+    routeTableIds: []
+    preferredSubnetId: ""
+    allowedCidrs: []
+    svmName: SVM2
+    rootVolumeSecurityStyle: UNIX
+
+# ---------------------------------------------------------------------------
+# FSx Endpoint Watcher
+# ---------------------------------------------------------------------------
+# Runs on BOTH clusters. Queries AWS FSx API to discover endpoint IPs,
+# then writes ConfigMaps and patches TridentBackendConfig at runtime.
+# This closes the loop: Crossplane creates FSx → watcher discovers IPs →
+# ontap-peering + Trident get configured automatically.
+endpointWatcher:
+  enabled: true
+  schedule: "*/3 * * * *"
+  image: amazon/aws-cli:2
+  local:
+    fileSystemName: ""
+    region: ""
+    svmName: SVM1
+  peer:
+    fileSystemName: ""
+    region: ""
+    svmName: SVM2
+
+# ---------------------------------------------------------------------------
+# S3 -- Trident Protect AppVault bucket
+# ---------------------------------------------------------------------------
+s3AppVault:
+  enabled: true
+  bucketName: trident-protect-bucket
+  region: us-west-1
+  tags:
+    Environment: production
+    ManagedBy: Crossplane
+    Purpose: Trident-Protect-AppVault
+
+# ---------------------------------------------------------------------------
+# VPC Peering (cross-region)
+# ---------------------------------------------------------------------------
+vpcPeering:
+  enabled: false
+  prod:
+    region: us-west-1
+    vpcId: ""
+    vpcCidr: ""
+    clusterName: ""
+    routeTableIds: []
+  dr:
+    region: us-east-1
+    vpcId: ""
+    vpcCidr: ""
+    clusterName: ""
+    routeTableIds: []
+  enableDnsResolution: true
+  tags:
+    ManagedBy: Crossplane
+    Purpose: DR-VPC-Peering
+
+# ---------------------------------------------------------------------------
+# Route53 DR Failover
+# ---------------------------------------------------------------------------
+route53Failover:
+  enabled: false
+  region: us-east-1
+  domain: ""
+  createHostedZone: true
+  hostedZoneId: ""
+  primaryIngressHostname: ""
+  secondaryIngressHostname: ""
+  primaryHealthCheckFqdn: ""
+  secondaryHealthCheckFqdn: ""
+  healthCheckPath: "/"
+  recordTtl: 60
+  apps: []
+  #  - name: boutique
+  #  - name: wordpress
+  tags:
+    ManagedBy: Crossplane
+    Purpose: DR-Failover

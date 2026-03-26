@@ -1,0 +1,23 @@
+{{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
+{{- range $inst := $instances }}
+---
+apiVersion: ec2.aws.upbound.io/v1beta1
+kind: SecurityGroup
+metadata:
+  name: {{ $inst.name }}-sg
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    name: {{ $inst.name }}-sg
+    description: Security Group for FSx for NetApp ONTAP File Storage Access
+    region: {{ $inst.region }}
+    vpcId: {{ $inst.vpcId }}
+    tags:
+      Name: {{ $inst.name }}-sg
+      {{- range $k, $v := $inst.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $.Values.global.providerConfigRef }}
+{{- end }}

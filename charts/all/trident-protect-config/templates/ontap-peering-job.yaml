@@ -1,5 +1,4 @@
 {{- if .Values.tridentProtect.ontapPeering.enabled }}
-{{- if and .Values.tridentFSX.clusterLIF .Values.tridentFSX.peer.interclusterIPs }}
 {{- $role := .Values.tridentProtect.ontapPeering.role | default "initiator" }}
 apiVersion: batch/v1
 kind: CronJob
@@ -34,11 +33,25 @@ spec:
                   ONTAP_PASS=$(cat /credentials/password)
                   AUTH="${ONTAP_USER}:${ONTAP_PASS}"
 
-                  LOCAL_CLUSTER_MGMT="{{ .Values.tridentFSX.clusterLIF }}"
-                  LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
-                  REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
-                  REMOTE_IC_IPS='{{ .Values.tridentFSX.peer.interclusterIPs | toJson }}'
+                  # Read endpoints from ConfigMap (populated by fsx-endpoint-watcher)
+                  # Fall back to Helm values for backward compatibility
+                  if [ -f /fsx-endpoints/LOCAL_CLUSTER_LIF ] && [ -s /fsx-endpoints/LOCAL_CLUSTER_LIF ]; then
+                    LOCAL_CLUSTER_MGMT=$(cat /fsx-endpoints/LOCAL_CLUSTER_LIF)
+                    LOCAL_SVM=$(cat /fsx-endpoints/LOCAL_SVM)
+                    REMOTE_SVM=$(cat /fsx-endpoints/PEER_SVM)
+                    REMOTE_IC_IPS=$(cat /fsx-endpoints/PEER_IC_IPS)
+                  else
+                    LOCAL_CLUSTER_MGMT="{{ .Values.tridentFSX.clusterLIF }}"
+                    LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
+                    REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
+                    REMOTE_IC_IPS='{{ .Values.tridentFSX.peer.interclusterIPs | toJson }}'
+                  fi
                   ROLE="{{ $role }}"
+
+                  if [ -z "${LOCAL_CLUSTER_MGMT}" ]; then
+                    echo "No cluster LIF available yet (ConfigMap not populated) — will retry"
+                    exit 0
+                  fi
 
                   api() {
                     curl -sk -u "${AUTH}" -H "Content-Type: application/json" "$@"
@@ -170,9 +183,15 @@ spec:
                 - name: ontap-creds
                   mountPath: /credentials
                   readOnly: true
+                - name: fsx-endpoints
+                  mountPath: /fsx-endpoints
+                  readOnly: true
           volumes:
             - name: ontap-creds
               secret:
                 secretName: {{ .Values.tridentProtect.ontapPeering.secretName }}
-{{- end }}
+            - name: fsx-endpoints
+              configMap:
+                name: fsx-endpoints
+                optional: true
 {{- end }}

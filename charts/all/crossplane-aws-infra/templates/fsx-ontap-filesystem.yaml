@@ -1,0 +1,48 @@
+{{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
+{{- range $inst := $instances }}
+---
+apiVersion: fsx.aws.upbound.io/v1beta1
+kind: OntapFileSystem
+metadata:
+  name: {{ $inst.name }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    region: {{ $inst.region }}
+    storageCapacity: {{ $inst.storageCapacity }}
+    throughputCapacity: {{ $inst.throughputCapacity }}
+    storageType: {{ $inst.storageType }}
+    deploymentType: {{ $inst.deploymentType }}
+    subnetIds:
+      {{- range $inst.subnetIds }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- if eq $inst.deploymentType "MULTI_AZ_1" }}
+    preferredSubnetId: {{ $inst.preferredSubnetId | quote }}
+    routeTableIds:
+      {{- range $inst.routeTableIds }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
+    securityGroupIdSelector:
+      matchLabels:
+        crossplane.io/external-name: {{ $inst.name }}-sg
+    fsxAdminPasswordSecretRef:
+      name: {{ $.Values.fsxOntap.passwordSecret.name }}
+      namespace: {{ $.Values.fsxOntap.passwordSecret.namespace }}
+      key: {{ $.Values.fsxOntap.passwordSecret.fsxAdminKey }}
+    weeklyMaintenanceStartTime: {{ $inst.weeklyMaintenanceStartTime | quote }}
+    automaticBackupRetentionDays: {{ $inst.automaticBackupRetentionDays }}
+    dailyAutomaticBackupStartTime: {{ $inst.dailyAutomaticBackupStartTime | quote }}
+    tags:
+      Name: {{ $inst.name }}
+      {{- range $k, $v := $inst.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $.Values.global.providerConfigRef }}
+  writeConnectionSecretToRef:
+    name: {{ $inst.name }}-conn
+    namespace: crossplane-system
+{{- end }}

@@ -99,6 +99,7 @@ clusterGroup:
     open-cluster-management:
     vault:
     golang-external-secrets:
+    crossplane-system:
     trident:
     trident-protect:
     openshift-cnv:
@@ -110,6 +111,11 @@ clusterGroup:
       namespace: open-cluster-management
       channel: release-2.15
       # csv: advanced-cluster-management.v2.6.1
+    crossplane:
+      name: crossplane-operator
+      namespace: crossplane-system
+      channel: stable
+      source: community-operators
     trident:
       name: trident-operator
       namespace: openshift-operators
@@ -117,6 +123,7 @@ clusterGroup:
       source: certified-operators
   argoProjects:
     - hub
+    - crossplane
     - trident
     - workload
   # Explicitly mention the cluster-state based overrides we plan to use for this pattern.
@@ -159,11 +166,28 @@ clusterGroup:
       argoProject: hub
       chart: golang-external-secrets
       chartVersion: 0.1.*
+    crossplane-providers:
+      name: crossplane-providers
+      namespace: crossplane-system
+      argoProject: crossplane
+      path: charts/all/crossplane-providers
+    crossplane-aws-infra:
+      name: crossplane-aws-infra
+      namespace: crossplane-system
+      argoProject: crossplane
+      path: charts/all/crossplane-aws-infra
     trident:
       name: trident
       namespace: trident
       path: charts/all/trident
       argoProject: trident
+      ignoreDifferences:
+        - group: trident.netapp.io
+          kind: TridentBackendConfig
+          jqPathExpressions:
+            - .spec.managementLIF
+            - .spec.svm
+            - .spec.replication
     protect:
       name: trident-protect
       namespace: trident-protect

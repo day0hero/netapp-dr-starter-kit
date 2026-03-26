@@ -91,12 +91,18 @@ clusterGroup:
   # Namespace is a dictionary for easier overriding (lists are supported as well)
   namespaces:
     golang-external-secrets:
+    crossplane-system:
     trident:
     trident-protect:
     boutique:
     wordpress:
   # The only subscription on spokes is gitops which gets managed by ACM
   subscriptions:
+    crossplane:
+      name: crossplane-operator
+      namespace: crossplane-system
+      channel: stable
+      source: community-operators
     trident:
       name: trident-operator
       namespace: openshift-operators
@@ -104,6 +110,7 @@ clusterGroup:
       source: certified-operators
   argoProjects:
     - eso
+    - crossplane
     - trident
     - protect
   applications:
@@ -113,11 +120,28 @@ clusterGroup:
       argoProject: eso
       chart: golang-external-secrets
       chartVersion: 0.2.*
+    crossplane-providers:
+      name: crossplane-providers
+      namespace: crossplane-system
+      argoProject: crossplane
+      path: charts/all/crossplane-providers
+    crossplane-aws-infra:
+      name: crossplane-aws-infra
+      namespace: crossplane-system
+      argoProject: crossplane
+      path: charts/all/crossplane-aws-infra
     trident:
       name: trident
       namespace: trident
       path: charts/all/trident
       argoProject: trident
+      ignoreDifferences:
+        - group: trident.netapp.io
+          kind: TridentBackendConfig
+          jqPathExpressions:
+            - .spec.managementLIF
+            - .spec.svm
+            - .spec.replication
     protect:
       name: trident-protect
       namespace: trident-protect

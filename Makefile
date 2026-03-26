@@ -82,6 +82,30 @@ endef
 
 ##@ NetApp DR Infrastructure
 
+##@ Crossplane Infrastructure
+
+.PHONY: crossplane-setup
+crossplane-setup: ## Discover clusters and write Crossplane values (then commit+push for ArgoCD)
+	$(call _validate_kubeconfigs,crossplane-setup)
+	@echo "=========================================="
+	@echo "Crossplane Infrastructure Setup"
+	@echo "  Prod kubeconfig: $(_PROD_KUBECONFIG)"
+	@echo "  DR kubeconfig:   $(_DR_KUBECONFIG)"
+	@echo "=========================================="
+	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/crossplane-setup.yaml \
+		-e @ansible/crossplane-vars.yml \
+		$(_DR_EXTRA_VARS)
+	@echo ""
+	@echo "=========================================="
+	@echo "  Values files updated. Next steps:"
+	@echo "    1. git diff  (review changes)"
+	@echo "    2. git add -A && git commit"
+	@echo "    3. git push  (triggers ArgoCD sync)"
+	@echo "    4. kubectl get managed  (monitor)"
+	@echo "=========================================="
+
+##@ Terraform DR Infrastructure (legacy)
+
 .PHONY: build-dr
 build-dr: ## Build complete DR infrastructure (state backend, VPC peering, FSx filesystems)
 	$(call _validate_kubeconfigs,build-dr)
