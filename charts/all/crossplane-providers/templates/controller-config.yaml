@@ -7,7 +7,10 @@ metadata:
 spec:
   deploymentTemplate:
     spec:
+      selector: {}
       template:
         spec:
-          securityContext:
-            runAsNonRoot: true
+          containers:
+            - name: package-runtime
+              securityContext: {}
+          securityContext: {}
