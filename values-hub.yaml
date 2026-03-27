@@ -410,9 +410,9 @@ vpcPeering:
 route53Failover:
   enabled: true
   region: us-west-1
-  domain: aws.validatedpatterns.io
-  createHostedZone: false
-  hostedZoneId: "Z001281810MV5UN93UQKQ"
+  domain: dr.aws.validatedpatterns.io
+  createHostedZone: False
+  hostedZoneId: ""
   primaryIngressHostname: router-default.apps.primary.aws.validatedpatterns.io
   secondaryIngressHostname: router-default.apps.secondary.aws.validatedpatterns.io
   primaryHealthCheckFqdn: router-default.apps.primary.aws.validatedpatterns.io
