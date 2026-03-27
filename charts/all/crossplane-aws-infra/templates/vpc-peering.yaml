@@ -56,6 +56,7 @@ kind: VPCPeeringConnectionOptions
 metadata:
   name: {{ $prod.clusterName }}-peering-opts-requester
 spec:
+  managementPolicies: ["Observe", "Create", "Delete"]
   forProvider:
     region: {{ $prod.region }}
     vpcPeeringConnectionIdRef:
@@ -71,6 +72,7 @@ kind: VPCPeeringConnectionOptions
 metadata:
   name: {{ $dr.clusterName }}-peering-opts-accepter
 spec:
+  managementPolicies: ["Observe", "Create", "Delete"]
   forProvider:
     region: {{ $dr.region }}
     vpcPeeringConnectionIdRef:

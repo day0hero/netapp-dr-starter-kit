@@ -22,7 +22,7 @@ tridentProtect:
 # Route53 DR Failover — domain auto-derived by crossplane-setup from cluster DNS
 drFailover:
   enabled: true
-  domain: "dr.aws.validatedpatterns.io"
+  domain: "aws.validatedpatterns.io"
   apps:
     - name: boutique
       routeName: frontend-dr
