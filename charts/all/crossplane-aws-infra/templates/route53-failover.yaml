@@ -34,7 +34,6 @@ metadata:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
   forProvider:
-    region: {{ $r53.region }}
     fqdn: {{ $r53.primaryHealthCheckFqdn | quote }}
     port: 443
     type: HTTPS
@@ -59,7 +58,6 @@ metadata:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
   forProvider:
-    region: {{ $r53.region }}
     fqdn: {{ $r53.secondaryHealthCheckFqdn | quote }}
     port: 443
     type: HTTPS
@@ -85,7 +83,6 @@ metadata:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
   forProvider:
-    region: {{ $r53.region }}
     {{- if $r53.createHostedZone }}
     zoneIdRef:
       name: dr-{{ $r53.domain | replace "." "-" }}
@@ -113,7 +110,6 @@ metadata:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
   forProvider:
-    region: {{ $r53.region }}
     {{- if $r53.createHostedZone }}
     zoneIdRef:
       name: dr-{{ $r53.domain | replace "." "-" }}

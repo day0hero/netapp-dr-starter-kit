@@ -177,8 +177,7 @@ clusterGroup:
         - group: route53.aws.upbound.io
           kind: Record
           jqPathExpressions:
-            - .spec.forProvider.failoverRoutingPolicy
-            - .spec.forProvider.tags
+            - .spec.forProvider.healthCheckId
         - group: route53.aws.upbound.io
           kind: HealthCheck
           jqPathExpressions:
