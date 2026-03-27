@@ -129,6 +129,7 @@ metadata:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
 spec:
+  activeDeadlineSeconds: 300
   backoffLimit: 3
   ttlSecondsAfterFinished: 600
   template:

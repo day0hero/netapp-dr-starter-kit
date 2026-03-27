@@ -12,6 +12,7 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 180
       backoffLimit: 0
       ttlSecondsAfterFinished: 120
       template:
@@ -196,6 +197,44 @@ spec:
                     done
                   else
                     echo "  No TridentBackendConfigs found yet — will retry"
+                  fi
+
+                  echo ""
+                  echo "--- Triggering ArgoCD refresh for dependent apps ---"
+
+                  kube_refresh_argocd_app() {
+                    local ns="$1" name="$2"
+                    local patch="{\"metadata\":{\"annotations\":{\"argocd.argoproj.io/refresh\":\"hard\"}}}"
+                    curl -sk -o /dev/null -w '%{http_code}' -X PATCH \
+                      "${K8S_API}/apis/argoproj.io/v1alpha1/namespaces/${ns}/applications/${name}" \
+                      -H "Authorization: Bearer ${K8S_TOKEN}" \
+                      -H "Content-Type: application/merge-patch+json" \
+                      -d "${patch}"
+                  }
+
+                  ARGO_APPS=$(curl -sk -H "Authorization: Bearer ${K8S_TOKEN}" \
+                    "${K8S_API}/apis/argoproj.io/v1alpha1/applications" 2>/dev/null \
+                    | python3 -c "
+                  import sys,json
+                  targets={'trident','crossplane-aws-infra'}
+                  try:
+                      for item in json.load(sys.stdin).get('items',[]):
+                          n=item['metadata']['name']
+                          if n in targets:
+                              print(item['metadata']['namespace']+'/'+n)
+                  except:
+                      pass
+                  " 2>/dev/null)
+
+                  if [ -n "${ARGO_APPS}" ]; then
+                    for APP in ${ARGO_APPS}; do
+                      APP_NS="${APP%%/*}"
+                      APP_NAME="${APP##*/}"
+                      HTTP=$(kube_refresh_argocd_app "${APP_NS}" "${APP_NAME}")
+                      echo "  Refreshed ${APP_NAME}: HTTP ${HTTP}"
+                    done
+                  else
+                    echo "  No matching ArgoCD apps found — skipping"
                   fi
 
                   echo ""
