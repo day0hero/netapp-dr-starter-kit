@@ -13,10 +13,6 @@ crossplane:
         package: xpkg.upbound.io/upbound/provider-aws-s3
       - name: provider-aws-route53
         package: xpkg.upbound.io/upbound/provider-aws-route53
-      - name: provider-aws-secretsmanager
-        package: xpkg.upbound.io/upbound/provider-aws-secretsmanager
-      - name: provider-aws-dynamodb
-        package: xpkg.upbound.io/upbound/provider-aws-dynamodb
 
   providerConfig:
     name: default

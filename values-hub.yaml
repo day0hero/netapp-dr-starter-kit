@@ -24,21 +24,18 @@ tridentProtect:
       minute: "0"
       snapshotRetention: "24"
       backupRetention: "7"
-# The build-dr make target will update the configuration in tridentFSX
+# FSx endpoint IPs are dynamically discovered by fsx-endpoint-watcher CronJob.
+# Only SVM names are needed here (deterministic, set by crossplane-setup).
 tridentFSX:
-  mgmtLIF: 198.19.146.230
-  clusterLIF: "198.19.146.67"
+  mgmtLIF: ""
+  clusterLIF: ""
   svm: SVM1
-  interclusterIPs:
-    - 10.0.135.95
-    - 10.0.159.183
+  interclusterIPs: []
   peer:
-    mgmtLIF: "198.19.211.131"
-    clusterLIF: "198.19.211.223"
+    mgmtLIF: ""
+    clusterLIF: ""
     svm: SVM2
-    interclusterIPs:
-      - 10.100.163.169
-      - 10.100.186.97
+    interclusterIPs: []
 clusterGroup:
   name: hub
   argoCD:

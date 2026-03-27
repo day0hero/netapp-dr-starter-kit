@@ -43,10 +43,32 @@ spec:
                 - |
                   set -euo pipefail
 
-                  # Install kubectl
-                  curl -sLo /usr/local/bin/kubectl \
-                    "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl" && \
-                    chmod +x /usr/local/bin/kubectl
+                  K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  K8S_API="https://kubernetes.default.svc"
+
+                  kube_apply_configmap() {
+                    local ns="$1" name="$2" data_json="$3"
+                    local payload="{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"${name}\",\"namespace\":\"${ns}\"},\"data\":${data_json}}"
+                    curl -sk -o /dev/null -w '%{http_code}' -X PATCH \
+                      "${K8S_API}/api/v1/namespaces/${ns}/configmaps/${name}?fieldManager=fsx-watcher&force=true" \
+                      -H "Authorization: Bearer ${K8S_TOKEN}" \
+                      -H "Content-Type: application/apply-patch+yaml" \
+                      -d "${payload}"
+                  }
+
+                  kube_list_tbc() {
+                    curl -sk -H "Authorization: Bearer ${K8S_TOKEN}" \
+                      "${K8S_API}/apis/trident.netapp.io/v1/namespaces/trident/tridentbackendconfigs" 2>/dev/null
+                  }
+
+                  kube_patch_tbc() {
+                    local name="$1" patch="$2"
+                    curl -sk -o /dev/null -w '%{http_code}' -X PATCH \
+                      "${K8S_API}/apis/trident.netapp.io/v1/namespaces/trident/tridentbackendconfigs/${name}" \
+                      -H "Authorization: Bearer ${K8S_TOKEN}" \
+                      -H "Content-Type: application/merge-patch+json" \
+                      -d "${patch}"
+                  }
 
                   echo "=== FSx Endpoint Watcher ($(date -u +%H:%M:%S)) ==="
                   echo "  Local: ${LOCAL_FSX_NAME} (${LOCAL_REGION}) SVM=${LOCAL_SVM_NAME}"
@@ -127,55 +149,50 @@ spec:
                   echo ""
                   echo "--- Creating ConfigMaps ---"
 
-                  CONFIGMAP_DATA="
-                  apiVersion: v1
-                  kind: ConfigMap
-                  metadata:
-                    name: fsx-endpoints
-                    namespace: trident-protect
-                  data:
-                    LOCAL_CLUSTER_LIF: \"${LOCAL_CLUSTER_LIF}\"
-                    LOCAL_MGMT_LIF: \"${LOCAL_MGMT_LIF}\"
-                    LOCAL_SVM: \"${LOCAL_SVM}\"
-                    LOCAL_IC_IPS: '${LOCAL_IC_IPS}'
-                    PEER_CLUSTER_LIF: \"${PEER_CLUSTER_LIF:-}\"
-                    PEER_MGMT_LIF: \"${PEER_MGMT_LIF:-}\"
-                    PEER_SVM: \"${PEER_SVM:-}\"
-                    PEER_IC_IPS: '${PEER_IC_IPS:-[]}'
-                  "
-                  echo "${CONFIGMAP_DATA}" | kubectl apply -f -
+                  CM_DATA=$(python3 -c "
+                  import json
+                  data = {
+                      'LOCAL_CLUSTER_LIF': '${LOCAL_CLUSTER_LIF}',
+                      'LOCAL_MGMT_LIF': '${LOCAL_MGMT_LIF}',
+                      'LOCAL_SVM': '${LOCAL_SVM}',
+                      'LOCAL_IC_IPS': '${LOCAL_IC_IPS}',
+                      'PEER_CLUSTER_LIF': '${PEER_CLUSTER_LIF:-}',
+                      'PEER_MGMT_LIF': '${PEER_MGMT_LIF:-}',
+                      'PEER_SVM': '${PEER_SVM:-}',
+                      'PEER_IC_IPS': '${PEER_IC_IPS:-[]}',
+                  }
+                  print(json.dumps(data))
+                  ")
 
-                  kubectl apply -f - <<EOCM
-                  apiVersion: v1
-                  kind: ConfigMap
-                  metadata:
-                    name: fsx-endpoints
-                    namespace: trident
-                  data:
-                    LOCAL_CLUSTER_LIF: "${LOCAL_CLUSTER_LIF}"
-                    LOCAL_MGMT_LIF: "${LOCAL_MGMT_LIF}"
-                    LOCAL_SVM: "${LOCAL_SVM}"
-                    LOCAL_IC_IPS: '${LOCAL_IC_IPS}'
-                    PEER_CLUSTER_LIF: "${PEER_CLUSTER_LIF:-}"
-                    PEER_MGMT_LIF: "${PEER_MGMT_LIF:-}"
-                    PEER_SVM: "${PEER_SVM:-}"
-                    PEER_IC_IPS: '${PEER_IC_IPS:-[]}'
-                  EOCM
+                  for NS in trident-protect trident; do
+                    HTTP=$(kube_apply_configmap "${NS}" "fsx-endpoints" "${CM_DATA}")
+                    echo "  ConfigMap fsx-endpoints in ${NS}: HTTP ${HTTP}"
+                  done
 
                   echo ""
                   echo "--- Patching TridentBackendConfigs ---"
 
-                  BACKENDS=$(kubectl get tridentbackendconfig -n trident -o name 2>/dev/null || true)
-                  if [ -n "${BACKENDS}" ]; then
-                    for TBC in ${BACKENDS}; do
+                  TBC_JSON=$(kube_list_tbc)
+                  TBC_NAMES=$(echo "${TBC_JSON}" | python3 -c "
+                  import sys,json
+                  try:
+                      items = json.load(sys.stdin).get('items',[])
+                      for i in items:
+                          print(i['metadata']['name'])
+                  except:
+                      pass
+                  " 2>/dev/null)
+
+                  if [ -n "${TBC_NAMES}" ]; then
+                    for TBC in ${TBC_NAMES}; do
                       echo "  Patching ${TBC}..."
                       PATCH="{\"spec\":{\"managementLIF\":\"${LOCAL_MGMT_LIF}\",\"svm\":\"${LOCAL_SVM}\""
                       if [ "${PEER_OK}" = "true" ]; then
                         PATCH="${PATCH},\"replication\":{\"isReplicationEnabled\":true,\"remoteSVMName\":\"${PEER_SVM}\"}"
                       fi
                       PATCH="${PATCH}}}"
-                      kubectl patch "${TBC}" -n trident --type merge -p "${PATCH}" 2>/dev/null || \
-                        echo "    (not ready yet — will retry)"
+                      HTTP=$(kube_patch_tbc "${TBC}" "${PATCH}")
+                      echo "    HTTP ${HTTP}"
                     done
                   else
                     echo "  No TridentBackendConfigs found yet — will retry"

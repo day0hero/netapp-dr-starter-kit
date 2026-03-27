@@ -34,9 +34,6 @@ fsxOntap:
     fsxAdminKey: fsx-admin-password
     svmAdminKey: svm-admin-password
 
-  secretsManager:
-    enabled: true
-
   tags:
     Environment: production
     ManagedBy: Crossplane

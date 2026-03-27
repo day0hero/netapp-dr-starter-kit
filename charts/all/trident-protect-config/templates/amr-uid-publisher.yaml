@@ -13,16 +13,21 @@ data:
   publish.py: |
     #!/usr/bin/env python3
     """Publish local Application UIDs to S3 for cross-cluster AMR consumption."""
-    import json, os, sys, datetime, hashlib, hmac, urllib.request, urllib.error
+    import json, os, sys, time, ssl, subprocess
+    import urllib.request, urllib.error
 
     TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
     API = "https://kubernetes.default.svc"
     APPS = json.loads(os.environ.get("APP_DEFINITIONS", "[]"))
     BUCKET = os.environ["S3_BUCKET"]
     REGION = os.environ["S3_REGION"]
-    ACCESS_KEY = os.environ["AWS_ACCESS_KEY_ID"]
-    SECRET_KEY = os.environ["AWS_SECRET_ACCESS_KEY"]
     S3_KEY = "dr-metadata/application-uids.json"
+    MAX_RETRIES = 6
+    RETRY_DELAY = 10
+
+    CTX = ssl.create_default_context()
+    CTX.check_hostname = False
+    CTX.verify_mode = ssl.CERT_NONE
 
     def kube_get(path):
         token = open(TOKEN_PATH).read().strip()
@@ -30,70 +35,26 @@ data:
             f"{API}{path}",
             headers={"Authorization": f"Bearer {token}"},
         )
-        import ssl
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         try:
-            return json.loads(urllib.request.urlopen(req, context=ctx).read())
+            return json.loads(urllib.request.urlopen(req, context=CTX).read())
         except urllib.error.HTTPError as e:
             print(f"  API error {e.code}: {e.read().decode()}", file=sys.stderr)
             return None
 
-    def sign(key, msg):
-        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+    print("=== AMR UID Publisher ===")
 
-    def s3_put(body_bytes):
-        host = f"{BUCKET}.s3.{REGION}.amazonaws.com"
-        now = datetime.datetime.now(datetime.timezone.utc)
-        datestamp = now.strftime("%Y%m%d")
-        amzdate = now.strftime("%Y%m%dT%H%M%SZ")
-        payload_hash = hashlib.sha256(body_bytes).hexdigest()
-
-        canonical = "\n".join([
-            "PUT", f"/{S3_KEY}", "",
-            f"host:{host}", f"x-amz-content-sha256:{payload_hash}",
-            f"x-amz-date:{amzdate}", "",
-            "host;x-amz-content-sha256;x-amz-date", payload_hash,
-        ])
-        scope = f"{datestamp}/{REGION}/s3/aws4_request"
-        string_to_sign = "\n".join([
-            "AWS4-HMAC-SHA256", amzdate, scope,
-            hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
-        ])
-        k = sign(sign(sign(sign(
-            f"AWS4{SECRET_KEY}".encode("utf-8"), datestamp),
-            REGION), "s3"), "aws4_request")
-        sig = hmac.new(k, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
-        auth = (f"AWS4-HMAC-SHA256 Credential={ACCESS_KEY}/{scope},"
-                f"SignedHeaders=host;x-amz-content-sha256;x-amz-date,"
-                f"Signature={sig}")
-
-        req = urllib.request.Request(
-            f"https://{host}/{S3_KEY}", data=body_bytes, method="PUT",
-            headers={
-                "Host": host, "x-amz-date": amzdate,
-                "x-amz-content-sha256": payload_hash,
-                "Authorization": auth, "Content-Type": "application/json",
-            },
-        )
-        urllib.request.urlopen(req)
-
-    import time
-
-    MAX_RETRIES = 6
-    RETRY_DELAY = 10
     for attempt in range(MAX_RETRIES):
         uids = {}
         missing = []
         for app in APPS:
             name = app["name"]
             ns = app["namespaces"][0]["name"]
-            data = kube_get(f"/apis/protect.trident.netapp.io/v1/namespaces/{ns}/applications/{name}")
+            data = kube_get(
+                f"/apis/protect.trident.netapp.io/v1/namespaces/{ns}/applications/{name}"
+            )
             if data and "metadata" in data:
-                uid = data["metadata"]["uid"]
-                uids[name] = {"uid": uid, "namespace": ns}
-                print(f"  {name}: {uid}")
+                uids[name] = {"uid": data["metadata"]["uid"], "namespace": ns}
+                print(f"  {name}: {uids[name]['uid']}")
             else:
                 missing.append(name)
                 print(f"  {name}: not found yet")
@@ -101,16 +62,26 @@ data:
         if not missing:
             break
         if attempt < MAX_RETRIES - 1:
-            print(f"  Waiting {RETRY_DELAY}s for missing apps: {missing}")
+            print(f"  Waiting {RETRY_DELAY}s for: {missing}")
             time.sleep(RETRY_DELAY)
 
-    if uids:
-        body = json.dumps({"applicationUIDs": uids}, indent=2).encode("utf-8")
-        s3_put(body)
-        print(f"Published {len(uids)} UID(s) to s3://{BUCKET}/{S3_KEY}")
-    else:
-        print("ERROR: No UIDs to publish — Application CRs not found")
+    if not uids:
+        print("ERROR: No Application UIDs found")
         sys.exit(1)
+
+    with open("/tmp/uids.json", "w") as f:
+        json.dump({"applicationUIDs": uids}, f, indent=2)
+
+    r = subprocess.run(
+        ["aws", "s3", "cp", "/tmp/uids.json",
+         f"s3://{BUCKET}/{S3_KEY}", "--region", REGION],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        print(f"S3 upload failed: {r.stderr}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Published {len(uids)} UID(s) to s3://{BUCKET}/{S3_KEY}")
 ---
 apiVersion: batch/v1
 kind: Job
@@ -129,7 +100,7 @@ spec:
       serviceAccountName: trident-protect-amr-reconcile
       containers:
         - name: publish
-          image: {{ .Values.tridentProtect.amrPostSync.image | default "image-registry.openshift-image-registry.svc:5000/openshift/tools" }}
+          image: {{ .Values.tridentProtect.amrPostSync.image | default "amazon/aws-cli:2" }}
           command: ["python3", "/scripts/publish.py"]
           env:
             - name: APP_DEFINITIONS

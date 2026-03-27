@@ -8,18 +8,14 @@ include Makefile-common
 # NetApp DR Starter Kit - Infrastructure Targets
 # =============================================================================
 #
-# These targets manage the DR infrastructure:
-#   - Terraform state backend (S3 bucket + DynamoDB from values-trident.yaml)
+# These targets manage the DR infrastructure via Crossplane (GitOps):
 #   - Cluster discovery (auto-detect VPC, CIDR, region from kubeconfigs)
-#   - VPC peering between prod and DR clusters
-#   - FSx for NetApp ONTAP filesystems in each region
+#   - Crossplane values written to Helm values files
+#   - ArgoCD syncs Crossplane managed resources (FSx, S3, VPC Peering, Route53)
 #
 # Required:
 #   PROD_KUBECONFIG - path to production cluster kubeconfig
 #   DR_KUBECONFIG   - path to DR cluster kubeconfig
-#
-# The terraform state bucket name is read from values-trident.yaml
-# (.terraform.state.bucket) automatically by the playbook.
 # =============================================================================
 
 # Expand ~ in kubeconfig paths
@@ -104,132 +100,26 @@ crossplane-setup: ## Discover clusters and write Crossplane values (then commit+
 	@echo "    4. kubectl get managed  (monitor)"
 	@echo "=========================================="
 
-##@ Terraform DR Infrastructure (legacy)
-
-.PHONY: build-dr
-build-dr: ## Build complete DR infrastructure (state backend, VPC peering, FSx filesystems)
-	$(call _validate_kubeconfigs,build-dr)
-	@echo "=========================================="
-	@echo "Building DR Infrastructure"
-	@echo "  Prod kubeconfig: $(_PROD_KUBECONFIG)"
-	@echo "  DR kubeconfig:   $(_DR_KUBECONFIG)"
-	@echo "  State bucket:    from values-trident.yaml"
-	@echo "=========================================="
-	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/dr-setup.yaml \
-		-e @ansible/dr-vars.yml \
-		$(_DR_EXTRA_VARS)
+##@ Crossplane DR Teardown
 
 .PHONY: destroy-dr
-destroy-dr: ## Destroy DR infrastructure (FSx filesystems and VPC peering; preserves state bucket)
+destroy-dr: ## Destroy DR infrastructure (pauses ArgoCD, cleans ONTAP, deletes Crossplane resources)
 	$(call _validate_kubeconfigs,destroy-dr)
 	@echo "=========================================="
-	@echo "Destroying DR Infrastructure"
+	@echo "WARNING: Destroying DR Infrastructure"
+	@echo "=========================================="
 	@echo "  Prod kubeconfig: $(_PROD_KUBECONFIG)"
 	@echo "  DR kubeconfig:   $(_DR_KUBECONFIG)"
-	@echo "  Note: State bucket is preserved"
-	@echo "=========================================="
-	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/dr-setup.yaml \
-		-e @ansible/dr-vars.yml \
-		$(_DR_EXTRA_VARS) \
-		-e destroy_resources=true
-
-# Trident Protect AppVault S3 bucket from values-global.yaml
-_APPVAULT_BUCKET := $(shell yq '.tridentProtect.appVault.s3.bucketName // ""' values-global.yaml 2>/dev/null)
-_APPVAULT_REGION := $(shell yq '.tridentProtect.appVault.s3.region // ""' values-global.yaml 2>/dev/null)
-
-.PHONY: create-appvault-bucket
-create-appvault-bucket: ## Create the S3 bucket for Trident Protect AppVault
-	@if [ -z "$(_APPVAULT_BUCKET)" ]; then \
-		echo "Error: Could not read .tridentProtect.appVault.s3.bucketName from values-global.yaml"; \
-		exit 1; \
-	fi
-	@if [ -z "$(_APPVAULT_REGION)" ]; then \
-		echo "Error: Could not read .tridentProtect.appVault.s3.region from values-global.yaml"; \
-		exit 1; \
-	fi
-	@echo "=========================================="
-	@echo "Trident Protect AppVault S3 Bucket"
-	@echo "=========================================="
-	@echo "  Bucket: $(_APPVAULT_BUCKET)"
-	@echo "  Region: $(_APPVAULT_REGION)"
-	@echo "=========================================="
-	@if aws s3api head-bucket --bucket $(_APPVAULT_BUCKET) --region $(_APPVAULT_REGION) 2>/dev/null; then \
-		echo "Bucket '$(_APPVAULT_BUCKET)' already exists - nothing to do."; \
-	else \
-		echo "Creating S3 bucket '$(_APPVAULT_BUCKET)' in $(_APPVAULT_REGION)..."; \
-		if [ "$(_APPVAULT_REGION)" = "us-east-1" ]; then \
-			aws s3api create-bucket \
-				--bucket $(_APPVAULT_BUCKET) \
-				--region $(_APPVAULT_REGION); \
-		else \
-			aws s3api create-bucket \
-				--bucket $(_APPVAULT_BUCKET) \
-				--region $(_APPVAULT_REGION) \
-				--create-bucket-configuration LocationConstraint=$(_APPVAULT_REGION); \
-		fi; \
-		echo "Bucket '$(_APPVAULT_BUCKET)' created."; \
-	fi
-
-# State bucket name, DynamoDB table, and region from values-trident.yaml
-_STATE_BUCKET := $(shell yq '.terraform.state.bucket // ""' values-trident.yaml 2>/dev/null)
-_DYNAMODB_TABLE := $(shell yq '.terraform.state.dynamodb_table // "terraform-state-lock"' values-trident.yaml 2>/dev/null)
-_STATE_REGION := $(shell yq '.terraform.state.region // "us-east-1"' values-trident.yaml 2>/dev/null)
-
-.PHONY: destroy-terraform-state
-destroy-terraform-state: ## Destroy the Terraform state backend (S3 bucket + DynamoDB table) - DESTRUCTIVE
-	@if [ -z "$(_STATE_BUCKET)" ]; then \
-		echo "Error: Could not read .terraform.state.bucket from values-trident.yaml"; \
-		exit 1; \
-	fi
-	@echo "=========================================="
-	@echo "WARNING: Destroying Terraform State Backend"
-	@echo "=========================================="
-	@echo "  S3 Bucket:      $(_STATE_BUCKET)"
-	@echo "  DynamoDB Table: $(_DYNAMODB_TABLE)"
-	@echo "  Region:         $(_STATE_REGION)"
 	@echo ""
-	@echo "  This will permanently delete all Terraform state!"
-	@echo "  Make sure you have destroyed all DR resources first"
-	@echo "  (make destroy-dr) or they will become orphaned."
+	@echo "  This will:"
+	@echo "    1. Pause ArgoCD auto-sync on both clusters"
+	@echo "    2. Clean up ONTAP (SnapMirror, volumes, peers)"
+	@echo "    3. Scrub AppVault S3 bucket"
+	@echo "    4. Delete Crossplane-managed AWS resources"
+	@echo "       (FSx, VPC peering, S3, Route53, security groups)"
 	@echo "=========================================="
 	@echo ""
 	@read -p "Type 'yes' to confirm: " confirm && [ "$$confirm" = "yes" ] || (echo "Aborted."; exit 1)
-	@echo ""
-	@echo "--- Emptying S3 bucket (all object versions) ---"
-	@aws s3api list-object-versions \
-		--bucket $(_STATE_BUCKET) \
-		--region $(_STATE_REGION) \
-		--query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' \
-		--output json 2>/dev/null | \
-	python3 -c "\
-	import sys, json, subprocess; \
-	data = json.load(sys.stdin); \
-	objects = data.get('Objects') or []; \
-	[subprocess.run(['aws', 's3api', 'delete-objects', '--bucket', '$(_STATE_BUCKET)', '--region', '$(_STATE_REGION)', '--delete', json.dumps({'Objects': objects[i:i+1000], 'Quiet': True})], check=True) for i in range(0, len(objects), 1000)] if objects else None; \
-	print(f'Deleted {len(objects)} object versions') if objects else print('No object versions to delete')" || true
-	@echo "--- Removing delete markers ---"
-	@aws s3api list-object-versions \
-		--bucket $(_STATE_BUCKET) \
-		--region $(_STATE_REGION) \
-		--query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' \
-		--output json 2>/dev/null | \
-	python3 -c "\
-	import sys, json, subprocess; \
-	data = json.load(sys.stdin); \
-	objects = data.get('Objects') or []; \
-	[subprocess.run(['aws', 's3api', 'delete-objects', '--bucket', '$(_STATE_BUCKET)', '--region', '$(_STATE_REGION)', '--delete', json.dumps({'Objects': objects[i:i+1000], 'Quiet': True})], check=True) for i in range(0, len(objects), 1000)] if objects else None; \
-	print(f'Removed {len(objects)} delete markers') if objects else print('No delete markers to remove')" || true
-	@echo "--- Deleting S3 bucket ---"
-	@aws s3api delete-bucket --bucket $(_STATE_BUCKET) --region $(_STATE_REGION) \
-		&& echo "S3 bucket '$(_STATE_BUCKET)' deleted" \
-		|| echo "S3 bucket '$(_STATE_BUCKET)' not found (already deleted?)"
-	@echo "--- Deleting DynamoDB table ---"
-	@aws dynamodb delete-table --table-name $(_DYNAMODB_TABLE) --region $(_STATE_REGION) > /dev/null 2>&1 \
-		&& echo "DynamoDB table '$(_DYNAMODB_TABLE)' deleted" \
-		|| echo "DynamoDB table '$(_DYNAMODB_TABLE)' not found (already deleted?)"
-	@echo "--- Cleaning local working directory ---"
-	@rm -rf /tmp/netapp-dr-terraform/terraform-state
-	@echo ""
-	@echo "=========================================="
-	@echo "  Terraform State Backend Destroyed"
-	@echo "=========================================="
+	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/crossplane-destroy.yaml \
+		-e @ansible/crossplane-vars.yml \
+		$(_DR_EXTRA_VARS)

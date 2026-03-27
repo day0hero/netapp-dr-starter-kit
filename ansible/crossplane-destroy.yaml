@@ -1,0 +1,723 @@
+---
+# =============================================================================
+# NetApp DR Starter Kit - Crossplane Infrastructure Destroy
+# =============================================================================
+#
+# This playbook tears down all Crossplane-managed DR infrastructure:
+#   1. Pauses ArgoCD auto-sync on both clusters
+#   2. Discovers FSx endpoints from ConfigMap / AWS
+#   3. Cleans up ONTAP (SnapMirror, volumes, SVM/cluster peers)
+#   4. Scrubs the AppVault S3 bucket
+#   5. Cleans up any remaining FSx volumes via AWS API
+#   6. Deletes Crossplane managed resources (hub)
+#
+# Usage:
+#   ansible-playbook ansible/crossplane-destroy.yaml \
+#     -e @ansible/crossplane-vars.yml \
+#     -e prod_kubeconfig=/path/to/prod/kubeconfig \
+#     -e dr_kubeconfig=/path/to/dr/kubeconfig
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Play 1: Discover clusters
+# -----------------------------------------------------------------------------
+- name: Discover Production Cluster
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Validate prod_kubeconfig
+      ansible.builtin.fail:
+        msg: "prod_kubeconfig is required"
+      when: prod_kubeconfig is not defined or prod_kubeconfig == ''
+
+    - name: Discover production cluster
+      ansible.builtin.include_role:
+        name: cluster_discovery
+      vars:
+        cluster_discovery_kubeconfig: "{{ prod_kubeconfig }}"
+        cluster_discovery_label: "Production"
+        cluster_discovery_name_override: "{{ prod_cluster_name_override | default('') }}"
+        cluster_discovery_region_override: "{{ prod_region_override | default('') }}"
+        cluster_discovery_vpc_cidr_override: "{{ prod_vpc_cidr_override | default('') }}"
+        cluster_discovery_vpc_name_override: "{{ prod_vpc_name_override | default('') }}"
+
+    - name: Store production cluster info
+      ansible.builtin.set_fact:
+        prod_cluster: "{{ cluster_discovery_result }}"
+        cacheable: true
+
+- name: Discover DR Cluster
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Validate dr_kubeconfig
+      ansible.builtin.fail:
+        msg: "dr_kubeconfig is required"
+      when: dr_kubeconfig is not defined or dr_kubeconfig == ''
+
+    - name: Discover DR cluster
+      ansible.builtin.include_role:
+        name: cluster_discovery
+      vars:
+        cluster_discovery_kubeconfig: "{{ dr_kubeconfig }}"
+        cluster_discovery_label: "DR"
+        cluster_discovery_name_override: "{{ dr_cluster_name_override | default('') }}"
+        cluster_discovery_region_override: "{{ dr_region_override | default('') }}"
+        cluster_discovery_vpc_cidr_override: "{{ dr_vpc_cidr_override | default('') }}"
+        cluster_discovery_vpc_name_override: "{{ dr_vpc_name_override | default('') }}"
+
+    - name: Store DR cluster info
+      ansible.builtin.set_fact:
+        dr_cluster: "{{ cluster_discovery_result }}"
+        cacheable: true
+
+# -----------------------------------------------------------------------------
+# Play 2: Pause ArgoCD auto-sync on both clusters
+# -----------------------------------------------------------------------------
+- name: Pause ArgoCD Applications
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _argo_ns: openshift-gitops
+    _app_patterns: "crossplane|trident|protect"
+  tasks:
+    - name: Pause ArgoCD apps on Production cluster
+      ansible.builtin.shell: |
+        set -o pipefail
+        APPS=$(KUBECONFIG="{{ prod_kubeconfig }}" oc get application -n {{ _argo_ns }} -o name 2>/dev/null || echo "")
+        if [ -z "${APPS}" ]; then
+          echo "No ArgoCD apps found on production cluster"
+          exit 0
+        fi
+        PAUSED=0
+        echo "${APPS}" | while read APP; do
+          case "${APP}" in
+            *crossplane*|*trident*|*protect*)
+              echo "  Pausing ${APP}..."
+              KUBECONFIG="{{ prod_kubeconfig }}" oc patch "${APP}" -n {{ _argo_ns }} \
+                --type merge -p '{"spec":{"syncPolicy":null}}' 2>/dev/null || true
+              PAUSED=$((PAUSED + 1))
+              ;;
+          esac
+        done
+        echo "ArgoCD apps paused on production cluster"
+      register: _pause_prod
+      changed_when: "'Pausing' in (_pause_prod.stdout | default(''))"
+      failed_when: false
+
+    - name: Display production pause result
+      ansible.builtin.debug:
+        msg: "{{ _pause_prod.stdout_lines | default(['(no output)']) }}"
+
+    - name: Pause ArgoCD apps on DR cluster
+      ansible.builtin.shell: |
+        set -o pipefail
+        APPS=$(KUBECONFIG="{{ dr_kubeconfig }}" oc get application -n {{ _argo_ns }} -o name 2>/dev/null || echo "")
+        if [ -z "${APPS}" ]; then
+          echo "No ArgoCD apps found on DR cluster"
+          exit 0
+        fi
+        echo "${APPS}" | while read APP; do
+          case "${APP}" in
+            *crossplane*|*trident*|*protect*)
+              echo "  Pausing ${APP}..."
+              KUBECONFIG="{{ dr_kubeconfig }}" oc patch "${APP}" -n {{ _argo_ns }} \
+                --type merge -p '{"spec":{"syncPolicy":null}}' 2>/dev/null || true
+              ;;
+          esac
+        done
+        echo "ArgoCD apps paused on DR cluster"
+      register: _pause_dr
+      changed_when: "'Pausing' in (_pause_dr.stdout | default(''))"
+      failed_when: false
+
+    - name: Display DR pause result
+      ansible.builtin.debug:
+        msg: "{{ _pause_dr.stdout_lines | default(['(no output)']) }}"
+
+    - name: Wait for sync operations to settle
+      ansible.builtin.pause:
+        seconds: 10
+
+# -----------------------------------------------------------------------------
+# Play 3: Discover FSx endpoints
+# -----------------------------------------------------------------------------
+- name: Discover FSx Endpoints
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _project_root: "{{ playbook_dir }}/.."
+    _prod_fsx_name: "{{ prod_file_system_name | default(prod_cluster.cluster_name ~ '-' ~ prod_cluster.region ~ '-fsx') }}"
+    _dr_fsx_name: "{{ dr_file_system_name | default(dr_cluster.cluster_name ~ '-' ~ dr_cluster.region ~ '-fsx') }}"
+  tasks:
+    - name: Try reading endpoints from Production ConfigMap
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ prod_kubeconfig }}" oc get configmap fsx-endpoints -n trident
+        -o jsonpath='{.data.LOCAL_CLUSTER_LIF}' 2>/dev/null || echo ""
+      register: _prod_cm_lif
+      changed_when: false
+      failed_when: false
+
+    - name: Try reading endpoints from DR ConfigMap
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ dr_kubeconfig }}" oc get configmap fsx-endpoints -n trident
+        -o jsonpath='{.data.LOCAL_CLUSTER_LIF}' 2>/dev/null || echo ""
+      register: _dr_cm_lif
+      changed_when: false
+      failed_when: false
+
+    - name: Fall back to AWS CLI discovery for Production
+      ansible.builtin.shell: |
+        set -o pipefail
+        FS_JSON=$(aws fsx describe-file-systems --region "{{ prod_cluster.region }}" \
+          --query "FileSystems[?Tags[?Key=='Name'&&Value=='{{ _prod_fsx_name }}']]|[0]" \
+          --output json 2>/dev/null || echo "null")
+        [ "${FS_JSON}" = "null" ] && exit 0
+        echo "${FS_JSON}" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        eps=d.get('OntapConfiguration',{}).get('Endpoints',{})
+        print(eps.get('Management',{}).get('IpAddresses',[''])[0])"
+      register: _prod_aws_lif
+      changed_when: false
+      failed_when: false
+      when: (_prod_cm_lif.stdout | default('') | trim) == ''
+
+    - name: Fall back to AWS CLI discovery for DR
+      ansible.builtin.shell: |
+        set -o pipefail
+        FS_JSON=$(aws fsx describe-file-systems --region "{{ dr_cluster.region }}" \
+          --query "FileSystems[?Tags[?Key=='Name'&&Value=='{{ _dr_fsx_name }}']]|[0]" \
+          --output json 2>/dev/null || echo "null")
+        [ "${FS_JSON}" = "null" ] && exit 0
+        echo "${FS_JSON}" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        eps=d.get('OntapConfiguration',{}).get('Endpoints',{})
+        print(eps.get('Management',{}).get('IpAddresses',[''])[0])"
+      register: _dr_aws_lif
+      changed_when: false
+      failed_when: false
+      when: (_dr_cm_lif.stdout | default('') | trim) == ''
+
+    - name: Set cluster LIF facts
+      ansible.builtin.set_fact:
+        _prod_cluster_lif: >-
+          {{ (_prod_cm_lif.stdout | default('') | trim) or
+             (_prod_aws_lif.stdout | default('') | trim) }}
+        _dr_cluster_lif: >-
+          {{ (_dr_cm_lif.stdout | default('') | trim) or
+             (_dr_aws_lif.stdout | default('') | trim) }}
+        _prod_fsx_name: "{{ _prod_fsx_name }}"
+        _dr_fsx_name: "{{ _dr_fsx_name }}"
+        cacheable: true
+
+    - name: Display discovered endpoints
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "  FSx Endpoints for Destroy"
+          - "=========================================="
+          - "  Production: {{ _prod_cluster_lif | default('NOT FOUND') }}"
+          - "  DR:          {{ _dr_cluster_lif | default('NOT FOUND') }}"
+          - "  Prod FSx:    {{ _prod_fsx_name }}"
+          - "  DR FSx:      {{ _dr_fsx_name }}"
+          - "=========================================="
+
+# -----------------------------------------------------------------------------
+# Play 4: ONTAP Cleanup (SnapMirror, volumes, peering)
+# -----------------------------------------------------------------------------
+- name: Remove ONTAP Peering Relationships
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Load FSx password from ~/.fsx file
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
+      block:
+        - name: Check if ~/.fsx file exists
+          ansible.builtin.stat:
+            path: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_stat
+
+        - name: Read password from ~/.fsx file
+          ansible.builtin.slurp:
+            src: "{{ '~/.fsx' | expanduser }}"
+          register: _fsx_file_content
+          when: _fsx_file_stat.stat.exists | default(false)
+
+        - name: Set password from ~/.fsx file
+          ansible.builtin.set_fact:
+            fsx_admin_password: "{{ _fsx_file_content.content | b64decode | trim }}"
+          when:
+            - _fsx_file_stat.stat.exists | default(false)
+            - _fsx_file_content.content is defined
+            - fsx_admin_password is not defined or fsx_admin_password == ''
+
+    - name: Skip ONTAP cleanup if no password available
+      ansible.builtin.debug:
+        msg: "WARNING: No FSx admin password found — skipping ONTAP cleanup. Create ~/.fsx or pass -e fsx_admin_password=..."
+      when: fsx_admin_password is not defined or fsx_admin_password == ''
+
+    - name: Write ONTAP unpeer script
+      ansible.builtin.copy:
+        dest: /tmp/ontap-unpeer.sh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -o pipefail
+          MGMT="${ONTAP_MGMT}"
+          AUTH="${ONTAP_AUTH}"
+
+          json_val() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)" 2>/dev/null; }
+          json_arr() { python3 -c "import sys,json; d=json.load(sys.stdin)
+          for r in d.get('records',[]): print($1)" 2>/dev/null; }
+
+          api_get()  { curl -sk -u "${AUTH}" "https://${MGMT}$1" 2>/dev/null; }
+          api_del()  { curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}$1" 2>/dev/null; }
+          api_patch() { curl -sk -u "${AUTH}" -X PATCH -H 'Content-Type: application/json' -d "$2" "https://${MGMT}$1" 2>/dev/null; }
+
+          echo "=== Testing connectivity to ${MGMT} ==="
+          HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+            -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
+          if [ "${HTTP_CODE}" = "000" ]; then
+            echo "WARNING: Cannot reach FSx management at ${MGMT} — skipping"
+            exit 0
+          fi
+          echo "Connected (HTTP ${HTTP_CODE})"
+
+          echo "=== Cleaning up SnapMirror relationships ==="
+          SM_UUIDS=$(api_get "/api/snapmirror/relationships?fields=uuid,state" \
+            | json_arr "r.get('uuid','')")
+          if [ -z "${SM_UUIDS}" ]; then
+            echo "  No SnapMirror relationships found"
+          else
+            for SM_UUID in ${SM_UUIDS}; do
+              echo "  Processing SnapMirror ${SM_UUID}..."
+              SM_STATE=$(api_get "/api/snapmirror/relationships/${SM_UUID}" \
+                | json_val "d.get('state','unknown')")
+              echo "    State: ${SM_STATE}"
+              if [ "${SM_STATE}" != "broken_off" ] && [ "${SM_STATE}" != "uninitialized" ]; then
+                echo "    Quiesce + break..."
+                api_patch "/api/snapmirror/relationships/${SM_UUID}" '{"state":"paused"}' >/dev/null
+                sleep 3
+                api_patch "/api/snapmirror/relationships/${SM_UUID}" '{"state":"broken_off"}' >/dev/null
+                sleep 2
+              fi
+              echo "    Deleting (destination_only)..."
+              RESP=$(api_del "/api/snapmirror/relationships/${SM_UUID}?destination_only=true")
+              ERR=$(echo "${RESP}" | json_val "d.get('error',{}).get('message','')")
+              if [ -n "${ERR}" ]; then
+                echo "    destination_only error: ${ERR} — trying source_only..."
+                api_del "/api/snapmirror/relationships/${SM_UUID}?source_only=true" >/dev/null
+              fi
+            done
+            echo "  Polling removal (max 2 min)..."
+            for i in $(seq 1 24); do
+              SM_LEFT=$(api_get "/api/snapmirror/relationships" | json_val "d.get('num_records',0)")
+              [ "${SM_LEFT}" = "0" ] && echo "  All SnapMirror relationships removed" && break
+              echo "  ${SM_LEFT} remaining (${i}/24)..." && sleep 5
+            done
+          fi
+
+          echo "=== Releasing SnapMirror source info ==="
+          DEST_LINES=$(api_get "/api/private/cli/snapmirror/list-destinations?fields=source-path,destination-path" \
+            | json_arr "r.get('source_path','')+'|'+r.get('destination_path','')")
+          if [ -z "${DEST_LINES}" ]; then
+            echo "  No SnapMirror source entries found"
+          else
+            echo "${DEST_LINES}" | while IFS='|' read -r SRC_PATH DST_PATH; do
+              echo "  Releasing ${SRC_PATH} -> ${DST_PATH}..."
+              curl -sk -u "${AUTH}" -X POST -H 'Content-Type: application/json' \
+                -d "{\"source_path\": \"${SRC_PATH}\", \"destination_path\": \"${DST_PATH}\", \"relationship_info_only\": true}" \
+                "https://${MGMT}/api/private/cli/snapmirror/release" 2>/dev/null >/dev/null
+            done
+            for i in $(seq 1 12); do
+              LEFT=$(api_get "/api/private/cli/snapmirror/list-destinations" | json_val "d.get('num_records',0)")
+              [ "${LEFT}" = "0" ] && echo "  All source info released" && break
+              echo "  ${LEFT} remaining (${i}/12)..." && sleep 5
+            done
+          fi
+
+          echo "=== Deleting non-root volumes ==="
+          VOL_LINES=$(api_get "/api/storage/volumes?is_svm_root=false&fields=uuid,name,state,type" \
+            | json_arr "r.get('uuid','')+'|'+r.get('name','')+'|'+r.get('state','')+'|'+r.get('type','')")
+          if [ -z "${VOL_LINES}" ]; then
+            echo "  No non-root volumes found"
+          else
+            echo "${VOL_LINES}" | while IFS='|' read -r V_UUID V_NAME V_STATE V_TYPE; do
+              echo "  Volume: ${V_NAME} (${V_UUID}) state=${V_STATE} type=${V_TYPE}"
+              [ "${V_TYPE}" = "dp" ] && echo "    Converting DP -> RW..." && \
+                api_patch "/api/storage/volumes/${V_UUID}" '{"type":"rw"}' >/dev/null 2>&1 && sleep 2
+              echo "    Unmounting..." && api_patch "/api/storage/volumes/${V_UUID}" '{"nas":{"path":""}}' >/dev/null 2>&1 && sleep 1
+              echo "    Offlining..." && api_patch "/api/storage/volumes/${V_UUID}" '{"state":"offline"}' >/dev/null 2>&1 && sleep 2
+              echo "    Deleting..." && api_del "/api/storage/volumes/${V_UUID}" >/dev/null
+            done
+            for i in $(seq 1 30); do
+              VOL_LEFT=$(api_get "/api/storage/volumes?is_svm_root=false" | json_val "d.get('num_records',0)")
+              [ "${VOL_LEFT}" = "0" ] && echo "  All non-root volumes deleted" && break
+              echo "  ${VOL_LEFT} remaining (${i}/30)..." && sleep 10
+            done
+          fi
+
+          echo "=== Deleting SVM peers ==="
+          for UUID in $(api_get "/api/svm/peers?fields=uuid" | json_arr "r.get('uuid','')"); do
+            echo "  DELETE SVM peer ${UUID}..." && api_del "/api/svm/peers/${UUID}" >/dev/null
+          done
+          for i in $(seq 1 24); do
+            COUNT=$(api_get "/api/svm/peers" | json_val "d.get('num_records',0)")
+            [ "${COUNT}" = "0" ] && echo "  All SVM peers removed" && break
+            echo "  ${COUNT} remaining (${i}/24)..." && sleep 5
+          done
+
+          echo "=== Deleting cluster peers ==="
+          for ATTEMPT in 1 2 3; do
+            REMAINING=0
+            for UUID in $(api_get "/api/cluster/peers?fields=uuid" | json_arr "r.get('uuid','')"); do
+              echo "  DELETE cluster peer ${UUID} (attempt ${ATTEMPT})..."
+              RESP=$(api_del "/api/cluster/peers/${UUID}")
+              ERR=$(echo "${RESP}" | json_val "d.get('error',{}).get('message','')")
+              [ -n "${ERR}" ] && echo "  Error: ${ERR}" && REMAINING=$((REMAINING + 1))
+            done
+            [ ${REMAINING} -eq 0 ] && break
+            sleep 10
+          done
+
+          echo "=== ONTAP cleanup complete ==="
+      when: fsx_admin_password is defined and fsx_admin_password != ''
+
+    - name: Remove ONTAP peering from Production FSx
+      ansible.builtin.shell: |
+        set -o pipefail
+        B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
+        echo ">>> Launching unpeer pod on Production cluster ({{ _prod_cluster_lif }})..."
+        KUBECONFIG="{{ prod_kubeconfig }}" oc run ontap-unpeer-prod \
+          --rm --restart=Never --attach=true \
+          --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
+          --env="ONTAP_MGMT={{ _prod_cluster_lif }}" \
+          --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
+          --env="SCRIPT_B64=${B64}" \
+          --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
+          -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
+        echo ">>> Production unpeer complete (rc=$?)"
+      register: _prod_unpeer
+      changed_when: true
+      failed_when: false
+      when:
+        - fsx_admin_password is defined and fsx_admin_password != ''
+        - _prod_cluster_lif | default('') | trim != ''
+
+    - name: Display Production unpeer output
+      ansible.builtin.debug:
+        var: _prod_unpeer.stdout_lines
+      when: _prod_unpeer is not skipped and _prod_unpeer.stdout is defined
+
+    - name: Remove ONTAP peering from DR FSx
+      ansible.builtin.shell: |
+        set -o pipefail
+        B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
+        echo ">>> Launching unpeer pod on DR cluster ({{ _dr_cluster_lif }})..."
+        KUBECONFIG="{{ dr_kubeconfig }}" oc run ontap-unpeer-dr \
+          --rm --restart=Never --attach=true \
+          --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
+          --env="ONTAP_MGMT={{ _dr_cluster_lif }}" \
+          --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
+          --env="SCRIPT_B64=${B64}" \
+          --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
+          -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
+        echo ">>> DR unpeer complete (rc=$?)"
+      register: _dr_unpeer
+      changed_when: true
+      failed_when: false
+      when:
+        - fsx_admin_password is defined and fsx_admin_password != ''
+        - _dr_cluster_lif | default('') | trim != ''
+
+    - name: Display DR unpeer output
+      ansible.builtin.debug:
+        var: _dr_unpeer.stdout_lines
+      when: _dr_unpeer is not skipped and _dr_unpeer.stdout is defined
+
+    - name: Clean up unpeer script
+      ansible.builtin.file:
+        path: /tmp/ontap-unpeer.sh
+        state: absent
+
+    - name: Wait for peering removal to propagate
+      ansible.builtin.pause:
+        seconds: 15
+      when: (_prod_cluster_lif | default('') | trim != '') or (_dr_cluster_lif | default('') | trim != '')
+
+# -----------------------------------------------------------------------------
+# Play 5: Scrub AppVault S3 bucket
+# -----------------------------------------------------------------------------
+- name: Scrub AppVault S3 DR metadata
+  hosts: localhost
+  gather_facts: false
+  vars:
+    _project_root: "{{ playbook_dir }}/.."
+  tasks:
+    - name: Read AppVault bucket config
+      ansible.builtin.shell: |
+        BUCKET=$(yq '.tridentProtect.appVault.s3.bucketName // ""' {{ _project_root }}/values-global.yaml)
+        REGION=$(yq '.tridentProtect.appVault.s3.region // ""' {{ _project_root }}/values-global.yaml)
+        echo "${BUCKET} ${REGION}"
+      register: _appvault_info
+      changed_when: false
+
+    - name: Set bucket facts
+      ansible.builtin.set_fact:
+        _appvault_bucket: "{{ _appvault_info.stdout.split()[0] }}"
+        _appvault_region: "{{ _appvault_info.stdout.split()[1] }}"
+
+    - name: Skip if bucket not configured
+      ansible.builtin.meta: end_play
+      when: _appvault_bucket == '' or _appvault_bucket == 'null'
+
+    - name: Remove dr-metadata/ from AppVault bucket
+      ansible.builtin.shell: |
+        echo "Removing dr-metadata/ from s3://{{ _appvault_bucket }}..."
+        aws s3 rm "s3://{{ _appvault_bucket }}/dr-metadata/" --recursive --region {{ _appvault_region }} 2>&1 || true
+      register: _s3_dr_metadata
+      changed_when: "'delete' in (_s3_dr_metadata.stdout | default(''))"
+
+    - name: Remove snapshot archives from AppVault bucket
+      ansible.builtin.shell: |
+        set -o pipefail
+        BUCKET="{{ _appvault_bucket }}"
+        REGION="{{ _appvault_region }}"
+        echo "Cleaning AppVault snapshot data from s3://${BUCKET}..."
+        PREFIXES=$(aws s3api list-objects-v2 --bucket "${BUCKET}" --region "${REGION}" \
+          --delimiter "/" --query "CommonPrefixes[].Prefix" --output text 2>/dev/null || echo "")
+        if [ -z "${PREFIXES}" ] || [ "${PREFIXES}" = "None" ]; then
+          echo "  Bucket is empty or inaccessible"
+          exit 0
+        fi
+        COUNT=0
+        for PREFIX in ${PREFIXES}; do
+          echo "  Removing s3://${BUCKET}/${PREFIX}..."
+          aws s3 rm "s3://${BUCKET}/${PREFIX}" --recursive --region "${REGION}" 2>&1
+          COUNT=$((COUNT + 1))
+        done
+        echo "Removed ${COUNT} top-level prefix(es)"
+      register: _s3_appvault_clean
+      changed_when: "'Removed' in (_s3_appvault_clean.stdout | default(''))"
+
+    - name: Display S3 cleanup results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AppVault S3 Cleanup"
+          - "  Bucket: {{ _appvault_bucket }}"
+          - "  DR metadata: {{ _s3_dr_metadata.stdout | default('skipped') | trim }}"
+          - "  AppVault data: {{ (_s3_appvault_clean.stdout_lines | default(['skipped'])) | last }}"
+          - "=========================================="
+
+# -----------------------------------------------------------------------------
+# Play 6: Clean up remaining FSx volumes via AWS API
+# -----------------------------------------------------------------------------
+- name: Clean up remaining FSx volumes via AWS API
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Look up FSx filesystem IDs by name tag
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws fsx describe-file-systems --region {{ item.region }} \
+          --query "FileSystems[?Tags[?Key=='Name' && Value=='{{ item.name }}']].FileSystemId" \
+          --output text 2>/dev/null | head -1
+      loop:
+        - name: "{{ _prod_fsx_name }}"
+          region: "{{ prod_cluster.region }}"
+          label: "Production"
+        - name: "{{ _dr_fsx_name }}"
+          region: "{{ dr_cluster.region }}"
+          label: "DR"
+      loop_control:
+        label: "{{ item.label }}"
+      register: _fsx_ids
+      changed_when: false
+      failed_when: false
+
+    - name: Delete remaining non-root volumes via AWS FSx API
+      ansible.builtin.shell: |
+        set -o pipefail
+        FS_ID="{{ item.stdout | trim }}"
+        REGION="{{ item.item.region }}"
+        LABEL="{{ item.item.label }}"
+
+        if [ -z "${FS_ID}" ] || [ "${FS_ID}" = "None" ]; then
+          echo "SKIP: No filesystem found for ${LABEL}"
+          exit 0
+        fi
+
+        echo "=== Cleaning up volumes on ${LABEL} filesystem ${FS_ID} ==="
+        VOL_IDS=$(aws fsx describe-volumes --region ${REGION} \
+          --filters "Name=file-system-id,Values=${FS_ID}" \
+          --query "Volumes[?OntapConfiguration.StorageVirtualMachineRoot!=\`true\`].VolumeId" \
+          --output text 2>/dev/null)
+
+        if [ -z "${VOL_IDS}" ] || [ "${VOL_IDS}" = "None" ]; then
+          echo "  No non-root volumes to clean up"
+          exit 0
+        fi
+
+        for VOL_ID in ${VOL_IDS}; do
+          echo "  Deleting ${VOL_ID}..."
+          aws fsx delete-volume --region ${REGION} \
+            --volume-id ${VOL_ID} \
+            --ontap-configuration '{"SkipFinalBackup":true}' 2>&1 || true
+        done
+
+        echo "  Waiting for volume deletions..."
+        for i in $(seq 1 30); do
+          REMAINING=$(aws fsx describe-volumes --region ${REGION} \
+            --filters "Name=file-system-id,Values=${FS_ID}" \
+            --query "length(Volumes[?OntapConfiguration.StorageVirtualMachineRoot!=\`true\` && Lifecycle!='DELETING' && Lifecycle!='FAILED'])" \
+            --output text 2>/dev/null)
+          if [ "${REMAINING}" = "0" ] || [ "${REMAINING}" = "None" ]; then
+            echo "  All non-root volumes deleted or deleting"
+            break
+          fi
+          echo "  ${REMAINING} volume(s) still active (${i}/30)..."
+          sleep 10
+        done
+      loop: "{{ _fsx_ids.results }}"
+      loop_control:
+        label: "{{ item.item.label }}"
+      register: _vol_cleanup
+      changed_when: "'Deleting' in (item.stdout | default(''))"
+      failed_when: false
+
+    - name: Display volume cleanup results
+      ansible.builtin.debug:
+        msg: "{{ item.stdout_lines | default(['(skipped)']) }}"
+      loop: "{{ _vol_cleanup.results }}"
+      loop_control:
+        label: "{{ item.item.item.label }}"
+      when: item.stdout is defined
+
+# -----------------------------------------------------------------------------
+# Play 7: Delete Crossplane managed resources on Hub
+# -----------------------------------------------------------------------------
+- name: Delete Crossplane Managed Resources
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Delete Route53 resources
+      ansible.builtin.shell: |
+        echo "--- Route53 records ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete record.route53.aws.upbound.io \
+          -l app.kubernetes.io/part-of=netapp-dr-starter-kit --ignore-not-found 2>/dev/null || true
+        echo "--- Route53 health checks ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete healthcheck.route53.aws.upbound.io \
+          -l app.kubernetes.io/part-of=netapp-dr-starter-kit --ignore-not-found 2>/dev/null || true
+        echo "--- Route53 zones ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete zone.route53.aws.upbound.io \
+          -l app.kubernetes.io/part-of=netapp-dr-starter-kit --ignore-not-found 2>/dev/null || true
+      changed_when: true
+      failed_when: false
+
+    - name: Delete VPC peering resources
+      ansible.builtin.shell: |
+        echo "--- VPC peering routes ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete route.ec2.aws.upbound.io \
+          -l app.kubernetes.io/part-of=netapp-dr-starter-kit --ignore-not-found 2>/dev/null || true
+        echo "--- VPC peering options ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete vpcpeeringconnectionoptions.ec2.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+        echo "--- VPC peering accepters ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete vpcpeeringconnectionaccepter.ec2.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+        echo "--- VPC peering connections ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete vpcpeeringconnection.ec2.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+      changed_when: true
+      failed_when: false
+
+    - name: Delete S3 AppVault resources
+      ansible.builtin.shell: |
+        echo "--- S3 sub-resources ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete bucketpublicaccessblock.s3.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete bucketserversideencryptionconfiguration.s3.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete bucketversioning.s3.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+        echo "--- S3 bucket ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete bucket.s3.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+      changed_when: true
+      failed_when: false
+
+    - name: Delete FSx SVMs
+      ansible.builtin.shell: |
+        echo "--- FSx SVMs ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete ontapstoragevirtualmachine.fsx.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for SVM deletion (up to 10m)
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ prod_kubeconfig }}" oc wait --for=delete
+        ontapstoragevirtualmachine.fsx.aws.upbound.io --all --timeout=600s 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: Delete FSx filesystems
+      ansible.builtin.shell: |
+        echo "--- FSx filesystems ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete ontapfilesystem.fsx.aws.upbound.io \
+          --all --ignore-not-found 2>/dev/null || true
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for filesystem deletion (up to 30m)
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ prod_kubeconfig }}" oc wait --for=delete
+        ontapfilesystem.fsx.aws.upbound.io --all --timeout=1800s 2>/dev/null || true
+      changed_when: false
+      failed_when: false
+
+    - name: Delete security groups
+      ansible.builtin.shell: |
+        echo "--- Security group rules ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete securitygrouprule.ec2.aws.upbound.io \
+          -l app.kubernetes.io/part-of=netapp-dr-starter-kit --ignore-not-found 2>/dev/null || true
+        echo "--- Security groups ---"
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete securitygroup.ec2.aws.upbound.io \
+          -l app.kubernetes.io/part-of=netapp-dr-starter-kit --ignore-not-found 2>/dev/null || true
+      changed_when: true
+      failed_when: false
+
+# -----------------------------------------------------------------------------
+# Play 8: Summary
+# -----------------------------------------------------------------------------
+- name: Destruction Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display destruction summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================================"
+          - "  NetApp DR Infrastructure - Destruction Complete"
+          - "============================================================"
+          - ""
+          - "  ONTAP Cleanup:"
+          - "    SnapMirror relationships: removed"
+          - "    Non-root volumes: removed"
+          - "    SVM/cluster peers: removed"
+          - ""
+          - "  AWS Resources (via Crossplane):"
+          - "    FSx ONTAP filesystems: deleting"
+          - "    VPC peering: removed"
+          - "    S3 AppVault bucket: removed"
+          - "    Route53 failover: removed"
+          - "    Security groups: removed"
+          - ""
+          - "  NOTE: ArgoCD auto-sync was paused for Crossplane"
+          - "  and Trident apps. Re-enable manually if needed:"
+          - "    oc get application -n openshift-gitops"
+          - "============================================================"

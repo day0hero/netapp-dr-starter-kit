@@ -1,5 +1,4 @@
 {{- if .Values.tridentProtect.snapmirrorHealth.enabled }}
-{{- if .Values.tridentFSX.clusterLIF }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -30,9 +29,21 @@ spec:
                   ONTAP_USER=$(cat /credentials/username)
                   ONTAP_PASS=$(cat /credentials/password)
                   AUTH="${ONTAP_USER}:${ONTAP_PASS}"
-                  MGMT="{{ .Values.tridentFSX.clusterLIF }}"
-                  LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
-                  REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
+
+                  if [ -f /fsx-endpoints/LOCAL_CLUSTER_LIF ] && [ -s /fsx-endpoints/LOCAL_CLUSTER_LIF ]; then
+                    MGMT=$(cat /fsx-endpoints/LOCAL_CLUSTER_LIF)
+                    LOCAL_SVM=$(cat /fsx-endpoints/LOCAL_SVM)
+                    REMOTE_SVM=$(cat /fsx-endpoints/PEER_SVM)
+                  else
+                    MGMT="{{ .Values.tridentFSX.clusterLIF }}"
+                    LOCAL_SVM="{{ .Values.tridentFSX.svm }}"
+                    REMOTE_SVM="{{ .Values.tridentFSX.peer.svm }}"
+                  fi
+
+                  if [ -z "${MGMT}" ]; then
+                    echo "No cluster LIF available yet (ConfigMap not populated) — will retry"
+                    exit 0
+                  fi
 
                   api() { curl -sk -u "${AUTH}" -H "Content-Type: application/json" "$@"; }
 
@@ -76,11 +87,6 @@ spec:
                   echo "  Found ${SM_COUNT} SnapMirror relationship(s)"
                   echo ""
 
-                  INTRA_CLUSTER=0
-                  UNHEALTHY=0
-                  UNINITIALIZED=0
-                  HEALTHY=0
-
                   echo "${SM_JSON}" | python3 -c "
                   import sys, json
                   d = json.load(sys.stdin)
@@ -118,9 +124,15 @@ spec:
                 - name: ontap-creds
                   mountPath: /credentials
                   readOnly: true
+                - name: fsx-endpoints
+                  mountPath: /fsx-endpoints
+                  readOnly: true
           volumes:
             - name: ontap-creds
               secret:
                 secretName: {{ .Values.tridentProtect.ontapPeering.secretName }}
-{{- end }}
+            - name: fsx-endpoints
+              configMap:
+                name: fsx-endpoints
+                optional: true
 {{- end }}

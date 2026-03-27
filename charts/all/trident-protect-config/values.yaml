@@ -76,7 +76,7 @@ tridentProtect:
   # AMR PostSync hook configuration
   # The PostSync hook patches sourceApplicationUID after ArgoCD syncs
   amrPostSync:
-    image: image-registry.openshift-image-registry.svc:5000/openshift/tools
+    image: amazon/aws-cli:2
 
   # AppMirrorRelationships for DR replication
   # Created declaratively by Helm; sourceApplicationUID is patched by a
