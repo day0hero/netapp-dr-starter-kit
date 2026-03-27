@@ -22,9 +22,9 @@ tridentProtect:
       namespaces:
         - name: wordpress
 
-# Route53 DR Failover — populated by `make build-dr` when dr_failover_domain is set
+# Route53 DR Failover — domain auto-derived by crossplane-setup from cluster DNS
 drFailover:
-  enabled: false
+  enabled: true
   domain: ""
   apps:
     - name: boutique

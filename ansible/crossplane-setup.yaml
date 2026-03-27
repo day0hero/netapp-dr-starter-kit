@@ -14,7 +14,7 @@
 #   2. Writes fsxOntap.* values into values-hub.yaml and values-secondary.yaml
 #   3. Writes vpcPeering.* values into values-hub.yaml
 #   4. Writes s3AppVault.* values from values-global.yaml
-#   5. Optionally writes route53Failover.* values
+#   5. Writes route53Failover.* values (auto-derives domain from cluster DNS)
 #
 # Once committed and pushed, ArgoCD syncs the Crossplane managed resources.
 #
@@ -246,7 +246,12 @@
       changed_when: true
 
 # -----------------------------------------------------------------------------
-# Play 6: Route53 DR Failover (optional)
+# Play 6: Route53 DR Failover
+# -----------------------------------------------------------------------------
+# Enabled by default. The failover domain is auto-derived from the production
+# cluster's base domain (e.g. primary.sandbox.example.com → dr.sandbox.example.com).
+# Override with dr_failover_domain in crossplane-vars.yml.
+# Disable with: -e route53_failover_enabled=false
 # -----------------------------------------------------------------------------
 - name: Configure Route53 DR Failover values
   hosts: localhost
@@ -254,9 +259,27 @@
   vars:
     _project_root: "{{ playbook_dir }}/.."
   tasks:
-    - name: Skip Route53 if domain not configured
+    - name: Skip Route53 if explicitly disabled
       ansible.builtin.meta: end_play
-      when: dr_failover_domain | default('') == ''
+      when: not (route53_failover_enabled | default(true) | bool)
+
+    - name: Discover primary cluster base domain
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ prod_kubeconfig }}" oc get dns.config/cluster
+        -o jsonpath='{.spec.baseDomain}'
+      register: _prod_base_domain
+      changed_when: false
+
+    - name: Discover secondary cluster base domain
+      ansible.builtin.shell: >-
+        KUBECONFIG="{{ dr_kubeconfig }}" oc get dns.config/cluster
+        -o jsonpath='{.spec.baseDomain}'
+      register: _dr_base_domain
+      changed_when: false
+
+    - name: Derive failover domain
+      ansible.builtin.set_fact:
+        _failover_domain: "{{ (dr_failover_domain | default('')) or ('dr.' ~ _prod_base_domain.stdout.split('.', 1)[1]) }}"
 
     - name: Discover primary cluster ingress hostname
       ansible.builtin.shell: >-
@@ -281,7 +304,7 @@
       ansible.builtin.shell: |
         yq -i '.route53Failover.enabled = true' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.region = "{{ prod_cluster.region }}"' {{ _project_root }}/values-hub.yaml
-        yq -i '.route53Failover.domain = "{{ dr_failover_domain }}"' {{ _project_root }}/values-hub.yaml
+        yq -i '.route53Failover.domain = "{{ _failover_domain }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.createHostedZone = {{ not (dr_failover_hosted_zone_id | default("") | length > 0) | lower }}' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.hostedZoneId = "{{ dr_failover_hosted_zone_id | default("") }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.primaryIngressHostname = "{{ _prod_router_hostname }}"' {{ _project_root }}/values-hub.yaml
@@ -295,7 +318,7 @@
     - name: Enable drFailover in values-global.yaml
       ansible.builtin.shell: |
         yq -i '.drFailover.enabled = true' {{ _project_root }}/values-global.yaml
-        yq -i '.drFailover.domain = "{{ dr_failover_domain }}"' {{ _project_root }}/values-global.yaml
+        yq -i '.drFailover.domain = "{{ _failover_domain }}"' {{ _project_root }}/values-global.yaml
       changed_when: true
 
     - name: Display Route53 failover summary
@@ -304,7 +327,7 @@
           - "=========================================="
           - "Route53 DR Failover Values Written"
           - "=========================================="
-          - "  Domain: {{ dr_failover_domain }}"
+          - "  Domain: {{ _failover_domain }}"
           - "  Primary router:   {{ _prod_router_hostname }}"
           - "  Secondary router: {{ _dr_router_hostname }}"
           - "  Apps: {{ dr_failover_apps | default([]) | map(attribute='name') | list }}"
@@ -340,6 +363,10 @@
           - "    VPC:           {{ dr_cluster.vpc_id }} ({{ dr_cluster.vpc_cidr }})"
           - "    Subnets:       {{ dr_cluster.subnet_ids[:2] }}"
           - "    SVM:           SVM2"
+          - ""
+          - "  ROUTE53 FAILOVER"
+          - "    Domain:        {{ _failover_domain | default('disabled') }}"
+          - "    Apps:          {{ dr_failover_apps | default([]) | map(attribute='name') | list }}"
           - ""
           - "  NEXT STEPS"
           - "    1. Review the updated values files"

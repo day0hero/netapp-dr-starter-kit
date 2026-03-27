@@ -55,10 +55,17 @@ fsx_deployment_type: "MULTI_AZ_1"
 # appvault_region: ""
 
 # -----------------------------------------------------------------------------
-# Route53 DR Failover (optional)
+# Route53 DR Failover
 # -----------------------------------------------------------------------------
-# Set dr_failover_domain to enable Route53 DNS failover for protected apps.
-dr_failover_domain: ""
+# Enabled by default. The failover domain is auto-derived from the production
+# cluster's base domain:
+#   primary.sandbox123.opentlc.com  →  dr.sandbox123.opentlc.com
+#
+# To use a custom domain, set dr_failover_domain below.
+# To use an existing hosted zone, set dr_failover_hosted_zone_id.
+# To disable entirely: -e route53_failover_enabled=false
+#
+# dr_failover_domain: "dr.example.com"
 # dr_failover_hosted_zone_id: ""
 
 dr_failover_apps:
