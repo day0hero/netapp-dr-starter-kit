@@ -423,15 +423,16 @@ vpcPeering:
       - rtb-0b428fb950bb2f476
 route53Failover:
   enabled: true
-  region: us-west-1
   domain: aws.validatedpatterns.io
   createHostedZone: false
   hostedZoneId: "Z001281810MV5UN93UQKQ"
   primaryIngressHostname: router-default.apps.primary.aws.validatedpatterns.io
   secondaryIngressHostname: router-default.apps.secondary.aws.validatedpatterns.io
-  primaryHealthCheckFqdn: router-default.apps.primary.aws.validatedpatterns.io
-  secondaryHealthCheckFqdn: router-default.apps.secondary.aws.validatedpatterns.io
   healthCheckPath: /
   apps:
     - name: boutique
+      primaryHealthCheckFqdn: frontend-boutique.apps.primary.aws.validatedpatterns.io
+      secondaryHealthCheckFqdn: frontend-boutique.apps.secondary.aws.validatedpatterns.io
     - name: wordpress
+      primaryHealthCheckFqdn: wordpress-wordpress.apps.primary.aws.validatedpatterns.io
+      secondaryHealthCheckFqdn: wordpress-wordpress.apps.secondary.aws.validatedpatterns.io

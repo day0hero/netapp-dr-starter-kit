@@ -13,7 +13,6 @@ metadata:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
   forProvider:
-    region: {{ $r53.region }}
     name: {{ $r53.domain }}
     tags:
       Name: {{ $r53.domain }}
@@ -24,56 +23,53 @@ spec:
     name: {{ $providerConfigRef }}
 {{- end }}
 
-{{/* Health Check - Primary Cluster */}}
----
-apiVersion: route53.aws.upbound.io/v1beta1
-kind: HealthCheck
-metadata:
-  name: dr-primary-cluster
-  labels:
-    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
-spec:
-  forProvider:
-    fqdn: {{ $r53.primaryHealthCheckFqdn | quote }}
-    port: 443
-    type: HTTPS
-    resourcePath: {{ $r53.healthCheckPath | quote }}
-    failureThreshold: 3
-    requestInterval: 30
-    tags:
-      Name: dr-primary-cluster
-      {{- range $k, $v := $r53.tags }}
-      {{ $k }}: {{ $v | quote }}
-      {{- end }}
-  providerConfigRef:
-    name: {{ $providerConfigRef }}
-
-{{/* Health Check - Secondary Cluster */}}
----
-apiVersion: route53.aws.upbound.io/v1beta1
-kind: HealthCheck
-metadata:
-  name: dr-secondary-cluster
-  labels:
-    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
-spec:
-  forProvider:
-    fqdn: {{ $r53.secondaryHealthCheckFqdn | quote }}
-    port: 443
-    type: HTTPS
-    resourcePath: {{ $r53.healthCheckPath | quote }}
-    failureThreshold: 3
-    requestInterval: 30
-    tags:
-      Name: dr-secondary-cluster
-      {{- range $k, $v := $r53.tags }}
-      {{ $k }}: {{ $v | quote }}
-      {{- end }}
-  providerConfigRef:
-    name: {{ $providerConfigRef }}
-
-{{/* Failover records for each app -- PRIMARY + SECONDARY */}}
+{{/* Per-app health checks and failover records */}}
 {{- range $app := $r53.apps }}
+{{- $hcPath := $app.healthCheckPath | default $r53.healthCheckPath | default "/" }}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: HealthCheck
+metadata:
+  name: {{ $app.name }}-primary-hc
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    fqdn: {{ $app.primaryHealthCheckFqdn | quote }}
+    port: 443
+    type: HTTPS
+    resourcePath: {{ $hcPath | quote }}
+    failureThreshold: 3
+    requestInterval: 30
+    tags:
+      Name: {{ $app.name }}-primary-hc
+      {{- range $k, $v := $r53.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: HealthCheck
+metadata:
+  name: {{ $app.name }}-secondary-hc
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    fqdn: {{ $app.secondaryHealthCheckFqdn | quote }}
+    port: 443
+    type: HTTPS
+    resourcePath: {{ $hcPath | quote }}
+    failureThreshold: 3
+    requestInterval: 30
+    tags:
+      Name: {{ $app.name }}-secondary-hc
+      {{- range $k, $v := $r53.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
 ---
 apiVersion: route53.aws.upbound.io/v1beta2
 kind: Record
@@ -98,7 +94,7 @@ spec:
     records:
       - {{ $r53.primaryIngressHostname | quote }}
     healthCheckIdRef:
-      name: dr-primary-cluster
+      name: {{ $app.name }}-primary-hc
   providerConfigRef:
     name: {{ $providerConfigRef }}
 ---
@@ -125,7 +121,7 @@ spec:
     records:
       - {{ $r53.secondaryIngressHostname | quote }}
     healthCheckIdRef:
-      name: dr-secondary-cluster
+      name: {{ $app.name }}-secondary-hc
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}

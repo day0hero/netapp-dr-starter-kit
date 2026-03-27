@@ -122,19 +122,18 @@ vpcPeering:
 # ---------------------------------------------------------------------------
 route53Failover:
   enabled: false
-  region: us-east-1
   domain: ""
   createHostedZone: true
   hostedZoneId: ""
   primaryIngressHostname: ""
   secondaryIngressHostname: ""
-  primaryHealthCheckFqdn: ""
-  secondaryHealthCheckFqdn: ""
   healthCheckPath: "/"
   recordTtl: 60
   apps: []
   #  - name: boutique
-  #  - name: wordpress
+  #    primaryHealthCheckFqdn: frontend-boutique.apps.primary.example.com
+  #    secondaryHealthCheckFqdn: frontend-boutique.apps.secondary.example.com
+  #    healthCheckPath: "/"
   tags:
     ManagedBy: Crossplane
     Purpose: DR-Failover
