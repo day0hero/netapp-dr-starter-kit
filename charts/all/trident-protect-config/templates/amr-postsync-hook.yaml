@@ -137,7 +137,7 @@ spec:
       serviceAccountName: trident-protect-amr-reconcile
       containers:
         - name: patch-uids
-          image: {{ .Values.tridentProtect.amrPostSync.image | default "amazon/aws-cli:2" }}
+          image: {{ .Values.tridentProtect.amrPostSync.image | default "image-registry.openshift-image-registry.svc:5000/crossplane-system/dr-tools:latest" }}
           command: ["python3", "/scripts/patch-uids.py"]
           env:
             - name: AMR_DEFINITIONS

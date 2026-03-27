@@ -62,7 +62,7 @@ fsxOntap:
 endpointWatcher:
   enabled: true
   schedule: "*/3 * * * *"
-  image: amazon/aws-cli:2
+  image: image-registry.openshift-image-registry.svc:5000/crossplane-system/dr-tools:latest
   local:
     fileSystemName: ""
     region: ""
@@ -71,6 +71,17 @@ endpointWatcher:
     fileSystemName: ""
     region: ""
     svmName: SVM2
+
+# ---------------------------------------------------------------------------
+# DR Tools Image Build
+# ---------------------------------------------------------------------------
+# Builds a custom image combining openshift/tools with the AWS CLI v2.
+# The image is consumed by the endpoint watcher and AMR PostSync jobs.
+drToolsBuild:
+  enabled: true
+  name: dr-tools
+  imagePullers:
+    - trident-protect
 
 # ---------------------------------------------------------------------------
 # S3 -- Trident Protect AppVault bucket

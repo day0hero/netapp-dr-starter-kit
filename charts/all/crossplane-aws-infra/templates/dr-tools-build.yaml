@@ -1,0 +1,50 @@
+{{- if .Values.drToolsBuild.enabled }}
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: {{ .Values.drToolsBuild.name }}
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: {{ .Values.drToolsBuild.name }}
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: {{ .Values.drToolsBuild.name }}:latest
+  source:
+    type: Dockerfile
+    dockerfile: |
+      FROM docker.io/amazon/aws-cli:latest AS awscli
+      RUN rm -rf /usr/local/aws-cli/v2/current/dist/awscli/examples \
+                 /usr/local/aws-cli/v2/current/dist/awscli/topics \
+                 /usr/local/aws-cli/v2/current/dist/docutils
+
+      FROM image-registry.openshift-image-registry.svc:5000/openshift/tools
+      COPY --from=awscli /usr/local/aws-cli /usr/local/aws-cli
+      RUN ln -s /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws
+  strategy:
+    type: Docker
+    dockerStrategy: {}
+  triggers:
+    - type: ConfigChange
+{{- range .Values.drToolsBuild.imagePullers }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Values.drToolsBuild.name }}-puller-{{ . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:image-puller
+subjects:
+  - kind: Group
+    name: system:serviceaccounts:{{ . }}
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
