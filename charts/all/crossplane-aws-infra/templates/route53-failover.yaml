@@ -77,7 +77,7 @@ spec:
 {{/* Failover records for each app -- PRIMARY + SECONDARY */}}
 {{- range $app := $r53.apps }}
 ---
-apiVersion: route53.aws.upbound.io/v1beta1
+apiVersion: route53.aws.upbound.io/v1beta2
 kind: Record
 metadata:
   name: {{ $app.name }}-primary
@@ -97,7 +97,7 @@ spec:
     ttl: {{ $r53.recordTtl }}
     setIdentifier: {{ $app.name }}-primary
     failoverRoutingPolicy:
-      - type: PRIMARY
+      type: PRIMARY
     records:
       - {{ $r53.primaryIngressHostname | quote }}
     healthCheckIdRef:
@@ -105,7 +105,7 @@ spec:
   providerConfigRef:
     name: {{ $providerConfigRef }}
 ---
-apiVersion: route53.aws.upbound.io/v1beta1
+apiVersion: route53.aws.upbound.io/v1beta2
 kind: Record
 metadata:
   name: {{ $app.name }}-secondary
@@ -125,7 +125,7 @@ spec:
     ttl: {{ $r53.recordTtl }}
     setIdentifier: {{ $app.name }}-secondary
     failoverRoutingPolicy:
-      - type: SECONDARY
+      type: SECONDARY
     records:
       - {{ $r53.secondaryIngressHostname | quote }}
     healthCheckIdRef:

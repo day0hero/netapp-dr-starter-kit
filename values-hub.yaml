@@ -173,6 +173,21 @@ clusterGroup:
       namespace: crossplane-system
       argoProject: crossplane
       path: charts/all/crossplane-aws-infra
+      ignoreDifferences:
+        - group: route53.aws.upbound.io
+          kind: Record
+          jqPathExpressions:
+            - .spec.forProvider.failoverRoutingPolicy
+            - .spec.forProvider.tags
+        - group: route53.aws.upbound.io
+          kind: HealthCheck
+          jqPathExpressions:
+            - .spec.forProvider.enableSni
+            - .spec.forProvider.tags
+        - group: ec2.aws.upbound.io
+          kind: VPCPeeringConnectionOptions
+          jqPathExpressions:
+            - .spec.managementPolicies
     trident:
       name: trident
       namespace: trident
