@@ -358,14 +358,14 @@ fsxOntap:
     fileSystemName: secondary-us-west-2-fsx
     vpcId: vpc-0e2d7a354a6eeb228
     subnetIds:
-      - subnet-08dc8fc3886c39aa9
-      - subnet-0ae3f2a01ed37ca25
+      - subnet-0450abcf2ebbcd136
+      - subnet-0e96ce690054ba57a
     routeTableIds:
-      - rtb-0f80fad295fbaef7c
-      - rtb-03170f7fdaabe5d7c
-      - rtb-0e0a6c998ca8b17b7
-      - rtb-0f8d054b229fdb78a
-    preferredSubnetId: subnet-08dc8fc3886c39aa9
+      - rtb-09d6229eecb6dd0af
+      - rtb-05c527753e03fbafe
+      - rtb-01d8a33dde19f7c8f
+      - rtb-0b428fb950bb2f476
+    preferredSubnetId: subnet-0450abcf2ebbcd136
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -402,9 +402,22 @@ vpcPeering:
     vpcCidr: 10.100.0.0/16
     clusterName: secondary
     routeTableIds:
-      - rtb-0f80fad295fbaef7c
+      - rtb-09d6229eecb6dd0af
       - rtb-0c2de929a8e82b349
-      - rtb-00b385f8726057a80
-      - rtb-03170f7fdaabe5d7c
-      - rtb-0e0a6c998ca8b17b7
-      - rtb-0f8d054b229fdb78a
+      - rtb-05c527753e03fbafe
+      - rtb-01d8a33dde19f7c8f
+      - rtb-0b428fb950bb2f476
+route53Failover:
+  enabled: true
+  region: us-west-1
+  domain: dr.aws.validatedpatterns.io
+  createHostedZone: False
+  hostedZoneId: ""
+  primaryIngressHostname: router-default.apps.primary.aws.validatedpatterns.io
+  secondaryIngressHostname: router-default.apps.secondary.aws.validatedpatterns.io
+  primaryHealthCheckFqdn: router-default.apps.primary.aws.validatedpatterns.io
+  secondaryHealthCheckFqdn: router-default.apps.secondary.aws.validatedpatterns.io
+  healthCheckPath: /
+  apps:
+    - name: boutique
+    - name: wordpress

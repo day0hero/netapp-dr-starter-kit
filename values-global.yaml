@@ -5,7 +5,6 @@ global:
     useCSV: false
     syncPolicy: Automatic
     installPlanApproval: Automatic
-
 tridentProtect:
   appVault:
     enabled: true
@@ -13,7 +12,6 @@ tridentProtect:
     s3:
       bucketName: trident-protect-bucket
       region: us-west-1
-
   applications:
     - name: boutique
       namespaces:
@@ -21,11 +19,10 @@ tridentProtect:
     - name: wordpress
       namespaces:
         - name: wordpress
-
 # Route53 DR Failover — domain auto-derived by crossplane-setup from cluster DNS
 drFailover:
   enabled: true
-  domain: ""
+  domain: "dr.aws.validatedpatterns.io"
   apps:
     - name: boutique
       routeName: frontend-dr
@@ -37,7 +34,6 @@ drFailover:
       namespace: wordpress
       serviceName: wordpress
       servicePort: http
-
 crossplane:
   providers:
     version: v2.4.0
@@ -48,7 +44,6 @@ crossplane:
       secretNamespace: crossplane-system
       secretKey: credentials
       fromVault: true
-
 main:
   clusterGroupName: hub
   multiSourceConfig:
