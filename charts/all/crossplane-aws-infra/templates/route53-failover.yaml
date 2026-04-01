@@ -85,7 +85,7 @@ spec:
     zoneIdRef:
       name: dr-{{ $r53.domain | replace "." "-" }}
     {{- else }}
-    zoneId: {{ $r53.hostedZoneId | quote }}
+    zoneId: {{ required "route53Failover.hostedZoneId is required when route53Failover.createHostedZone is false — set it to the Route53 hosted zone ID for route53Failover.domain (e.g. Z123... from AWS console or list-hosted-zones)" $r53.hostedZoneId | quote }}
     {{- end }}
     name: {{ $app.name }}.{{ $r53.domain }}
     type: CNAME
@@ -112,7 +112,7 @@ spec:
     zoneIdRef:
       name: dr-{{ $r53.domain | replace "." "-" }}
     {{- else }}
-    zoneId: {{ $r53.hostedZoneId | quote }}
+    zoneId: {{ required "route53Failover.hostedZoneId is required when route53Failover.createHostedZone is false — set it to the Route53 hosted zone ID for route53Failover.domain (e.g. Z123... from AWS console or list-hosted-zones)" $r53.hostedZoneId | quote }}
     {{- end }}
     name: {{ $app.name }}.{{ $r53.domain }}
     type: CNAME

@@ -85,11 +85,13 @@ fsx_ontap_terraform_create_secrets: true
 # During failover, Route53 automatically routes traffic to the healthy cluster.
 # Leave empty to skip Route53 setup entirely.
 #
-# If you own the parent zone in Route53, set dr_failover_hosted_zone_id to
-# skip hosted zone creation and use your existing zone. Otherwise a new zone
-# is created and you must delegate the NS records from your parent zone.
+# If you own the zone in Route53, set dr_failover_hosted_zone_id to the Z...
+# id, or use crossplane-setup discovery (dr_failover_discover_hosted_zone_id)
+# — see ansible/crossplane-vars.yml. Otherwise a new zone may be created and
+# you must delegate NS from the parent zone.
 dr_failover_domain: ""
 # dr_failover_hosted_zone_id: ""
+# dr_failover_hosted_zone_lookup_name: "aws.validatedpatterns.io"
 
 # Apps that get failover records (must match drFailover.apps in values-global.yaml)
 dr_failover_apps:

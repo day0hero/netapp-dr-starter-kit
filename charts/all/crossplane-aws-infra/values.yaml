@@ -123,6 +123,7 @@ vpcPeering:
 route53Failover:
   enabled: false
   domain: ""
+  # If false, you must set hostedZoneId to an existing public zone for `domain` (Crossplane cannot create records without it).
   createHostedZone: true
   hostedZoneId: ""
   primaryIngressHostname: ""

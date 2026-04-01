@@ -528,8 +528,10 @@ vpcPeering:
 route53Failover:
   enabled: true
   domain: dr.aws.validatedpatterns.io
+  # If false: set hostedZoneId to the Route53 zone ID for `domain` (see ansible dr_failover_hosted_zone_id or AWS console).
+  # If true: Crossplane creates the zone; delegate NS at the parent registrar.
   createHostedZone: False
-  hostedZoneId: ""
+  hostedZoneId: "Z001281810MV5UN93UQKQ"
   primaryIngressHostname: router-default.apps.primary.aws.validatedpatterns.io
   secondaryIngressHostname: router-default.apps.secondary.aws.validatedpatterns.io
   healthCheckPath: /

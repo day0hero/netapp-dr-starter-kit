@@ -62,17 +62,35 @@ fsx_deployment_type: "MULTI_AZ_1"
 #   primary.sandbox123.opentlc.com  →  dr.sandbox123.opentlc.com
 #
 # To use a custom domain, set dr_failover_domain below.
-# To use an existing hosted zone, set dr_failover_hosted_zone_id.
-# To disable entirely: -e route53_failover_enabled=false
+# Hosted zone for Crossplane Route53 records (no manual typing required by default):
+#   - Leave dr_failover_hosted_zone_id empty; the playbook discovers Z... via AWS API
+#     (aws CLI + credentials for the account that owns the zone).
+#   - It tries the failover domain apex first, then (if the domain starts with dr.)
+#     the parent apex (e.g. dr.aws.example.com -> aws.example.com).
+#   - Optional override: dr_failover_hosted_zone_lookup_name if you need a specific apex.
+#   - Optional explicit: dr_failover_hosted_zone_id when discovery cannot run (air-gapped).
+# Disable parent fallback: -e dr_failover_discover_hosted_zone_parent=false
+# To disable Route53 in this playbook: -e route53_failover_enabled=false
 #
 # dr_failover_domain: "dr.example.com"
 # dr_failover_hosted_zone_id: ""
+# dr_failover_discover_hosted_zone_id: true
+# dr_failover_discover_hosted_zone_parent: true
+# dr_failover_hosted_zone_lookup_name: "aws.validatedpatterns.io"
 
 dr_failover_apps:
   - name: boutique
   - name: wordpress
 
 dr_failover_health_check_path: "/"
+
+# When true and dr_failover_hosted_zone_id is empty, crossplane-setup runs
+# aws route53 list-hosted-zones-by-name (see comments above).
+dr_failover_discover_hosted_zone_id: true
+
+# When true, if the first lookup finds no zone and domain starts with dr., retry
+# with the parent name (dr.aws.x -> aws.x).
+dr_failover_discover_hosted_zone_parent: true
 
 # -----------------------------------------------------------------------------
 # VPC Peering

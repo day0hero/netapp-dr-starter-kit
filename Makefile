@@ -87,6 +87,7 @@ crossplane-setup: ## Discover clusters and write Crossplane values (then commit+
 	@echo "Crossplane Infrastructure Setup"
 	@echo "  Prod kubeconfig: $(_PROD_KUBECONFIG)"
 	@echo "  DR kubeconfig:   $(_DR_KUBECONFIG)"
+	@echo "  (Route53: configure AWS credentials for hosted-zone discovery — no zone ID in Git)"
 	@echo "=========================================="
 	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/crossplane-setup.yaml \
 		-e @ansible/crossplane-vars.yml \

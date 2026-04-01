@@ -14,7 +14,8 @@
 #   2. Writes fsxOntap.* values into values-hub.yaml and values-secondary.yaml
 #   3. Writes vpcPeering.* values into values-hub.yaml
 #   4. Writes s3AppVault.* values from values-global.yaml
-#   5. Writes route53Failover.* values (auto-derives domain from cluster DNS)
+#   5. Writes route53Failover.* values (domain from cluster DNS; optional AWS
+#      lookup of hosted zone ID — see crossplane-vars.yml)
 #
 # Once committed and pushed, ArgoCD syncs the Crossplane managed resources.
 #
@@ -251,6 +252,9 @@
 # Enabled by default. The failover domain is auto-derived from the production
 # cluster's base domain (e.g. primary.sandbox.example.com → dr.sandbox.example.com).
 # Override with dr_failover_domain in crossplane-vars.yml.
+# Hosted zone ID: set dr_failover_hosted_zone_id, or leave empty and enable
+# dr_failover_discover_hosted_zone_id (requires aws CLI + credentials for the account).
+# Optional dr_failover_hosted_zone_lookup_name if the zone apex differs from the failover domain.
 # Disable with: -e route53_failover_enabled=false
 # -----------------------------------------------------------------------------
 - name: Configure Route53 DR Failover values
@@ -300,13 +304,61 @@
         _prod_router_hostname: "router-default.{{ _prod_ingress_domain.stdout }}"
         _dr_router_hostname: "router-default.{{ _dr_ingress_domain.stdout }}"
 
+    - name: Compute DNS apex for Route53 hosted zone lookup
+      ansible.builtin.set_fact:
+        _route53_zone_lookup_name: >-
+          {{ dr_failover_hosted_zone_lookup_name
+             if (dr_failover_hosted_zone_lookup_name | default('') | trim | length > 0)
+             else _failover_domain }}
+
+    - name: Resolve Route53 hosted zone ID (explicit var, or automated discovery)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        # No manual zone ID: discover via AWS API (requires aws CLI + account credentials).
+        if [ -n "${ZONE_ID_EXPLICIT}" ]; then
+          printf '%s' "${ZONE_ID_EXPLICIT}"
+          exit 0
+        fi
+        if [ "${DISCOVER}" != "true" ]; then
+          exit 0
+        fi
+        lookup_zone() {
+          local DOMAIN="$1"
+          [ -z "$DOMAIN" ] && return 0
+          aws route53 list-hosted-zones-by-name \
+            --dns-name "$DOMAIN" \
+            --query "HostedZones[?Name=='${DOMAIN}.'].Id" \
+            --output text 2>/dev/null | head -1 | sed 's|/hostedzone/||' || true
+        }
+        ZID=""
+        FIRST="${ZONE_LOOKUP_NAME}"
+        if [ -n "${FIRST}" ]; then
+          ZID=$(lookup_zone "${FIRST}")
+        fi
+        # If failover domain is dr.example.com but the hosted zone is example.com, try parent apex.
+        if [ -z "${ZID}" ] && [ "${FALLBACK_PARENT:-true}" = "true" ] && [[ "${FIRST}" == dr.* ]]; then
+          PARENT="${FIRST#dr.}"
+          if [ -n "${PARENT}" ]; then
+            ZID=$(lookup_zone "${PARENT}")
+          fi
+        fi
+        printf '%s' "${ZID:-}"
+      environment:
+        ZONE_ID_EXPLICIT: "{{ dr_failover_hosted_zone_id | default('') | trim }}"
+        DISCOVER: "{{ dr_failover_discover_hosted_zone_id | default(true) | bool | lower }}"
+        ZONE_LOOKUP_NAME: "{{ _route53_zone_lookup_name }}"
+        FALLBACK_PARENT: "{{ dr_failover_discover_hosted_zone_parent | default(true) | bool | lower }}"
+        AWS_DEFAULT_REGION: "{{ prod_cluster.region }}"
+      register: _r53_zone_resolve
+      changed_when: false
+
     - name: Write route53Failover values to values-hub.yaml
       ansible.builtin.shell: |
         yq -i '.route53Failover.enabled = true' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.region = "{{ prod_cluster.region }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.domain = "{{ _failover_domain }}"' {{ _project_root }}/values-hub.yaml
-        yq -i '.route53Failover.createHostedZone = {{ not (dr_failover_hosted_zone_id | default("") | length > 0) | lower }}' {{ _project_root }}/values-hub.yaml
-        yq -i '.route53Failover.hostedZoneId = "{{ dr_failover_hosted_zone_id | default("") }}"' {{ _project_root }}/values-hub.yaml
+        yq -i '.route53Failover.createHostedZone = {{ not (_r53_zone_resolve.stdout | trim | length > 0) | lower }}' {{ _project_root }}/values-hub.yaml
+        yq -i '.route53Failover.hostedZoneId = "{{ _r53_zone_resolve.stdout | trim }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.primaryIngressHostname = "{{ _prod_router_hostname }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.secondaryIngressHostname = "{{ _dr_router_hostname }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.primaryHealthCheckFqdn = "{{ _prod_router_hostname }}"' {{ _project_root }}/values-hub.yaml
@@ -328,6 +380,8 @@
           - "Route53 DR Failover Values Written"
           - "=========================================="
           - "  Domain: {{ _failover_domain }}"
+          - "  Zone lookup (then dr.* parent if needed): {{ _route53_zone_lookup_name }}"
+          - "  Hosted zone ID: {{ (_r53_zone_resolve.stdout | trim | length > 0) | ternary(_r53_zone_resolve.stdout | trim, '(empty — Crossplane will create a zone if createHostedZone is true)') }}"
           - "  Primary router:   {{ _prod_router_hostname }}"
           - "  Secondary router: {{ _dr_router_hostname }}"
           - "  Apps: {{ dr_failover_apps | default([]) | map(attribute='name') | list }}"
