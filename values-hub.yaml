@@ -350,14 +350,14 @@ fsxOntap:
   enabled: true
   region: us-west-1
   fileSystemName: primary-us-west-1-fsx
-  vpcId: vpc-07b4833d24968f823
+  vpcId: vpc-03ee24b790b179693
   subnetIds:
-    - subnet-0cdb29ca76354ba77
-    - subnet-0af9b778f68ac1002
+    - subnet-00cc78c5b893ac0be
+    - subnet-0d67a2c1ed1107e5a
   routeTableIds:
-    - rtb-0d3230a63757edd71
-    - rtb-02d7cb5df997b552b
-  preferredSubnetId: subnet-0cdb29ca76354ba77
+    - rtb-09f259bcc7021c679
+    - rtb-0cfb9a8c7cace8190
+  preferredSubnetId: subnet-00cc78c5b893ac0be
   allowedCidrs:
     - 10.0.0.0/16
     - 10.100.0.0/16
@@ -370,16 +370,16 @@ fsxOntap:
     enabled: true
     region: us-west-2
     fileSystemName: secondary-us-west-2-fsx
-    vpcId: vpc-0e2d7a354a6eeb228
+    vpcId: vpc-046eb85b94a12761c
     subnetIds:
-      - subnet-0450abcf2ebbcd136
-      - subnet-0e96ce690054ba57a
+      - subnet-01c6e2b9b4ef7719f
+      - subnet-0e58704e8e19cb0ff
     routeTableIds:
-      - rtb-09d6229eecb6dd0af
-      - rtb-05c527753e03fbafe
-      - rtb-01d8a33dde19f7c8f
-      - rtb-0b428fb950bb2f476
-    preferredSubnetId: subnet-0450abcf2ebbcd136
+      - rtb-040adb35b94ff6ee3
+      - rtb-0ab723f216a0b6c8d
+      - rtb-0a1d7aebc52c67d5e
+      - rtb-0c43a57f53de50c2e
+    preferredSubnetId: subnet-01c6e2b9b4ef7719f
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -402,37 +402,37 @@ vpcPeering:
   enabled: true
   prod:
     region: us-west-1
-    vpcId: vpc-07b4833d24968f823
+    vpcId: vpc-03ee24b790b179693
     vpcCidr: 10.0.0.0/16
     clusterName: primary
     routeTableIds:
-      - rtb-03408e47a0f1f3aaf
-      - rtb-0d3230a63757edd71
-      - rtb-02d7cb5df997b552b
-      - rtb-0eda66c154c174118
+      - rtb-09f259bcc7021c679
+      - rtb-0cfb9a8c7cace8190
+      - rtb-0d0e30d62de24a014
+      - rtb-0d20ee1b6ce71dd81
   dr:
     region: us-west-2
-    vpcId: vpc-0e2d7a354a6eeb228
+    vpcId: vpc-046eb85b94a12761c
     vpcCidr: 10.100.0.0/16
     clusterName: secondary
     routeTableIds:
-      - rtb-09d6229eecb6dd0af
-      - rtb-0c2de929a8e82b349
-      - rtb-05c527753e03fbafe
-      - rtb-01d8a33dde19f7c8f
-      - rtb-0b428fb950bb2f476
+      - rtb-040adb35b94ff6ee3
+      - rtb-051a62e50c47e7e00
+      - rtb-0ab723f216a0b6c8d
+      - rtb-076b7d0e55ed79d81
+      - rtb-0a1d7aebc52c67d5e
+      - rtb-0c43a57f53de50c2e
 route53Failover:
   enabled: true
-  domain: aws.validatedpatterns.io
-  createHostedZone: false
-  hostedZoneId: "Z001281810MV5UN93UQKQ"
+  domain: dr.aws.validatedpatterns.io
+  createHostedZone: False
+  hostedZoneId: ""
   primaryIngressHostname: router-default.apps.primary.aws.validatedpatterns.io
   secondaryIngressHostname: router-default.apps.secondary.aws.validatedpatterns.io
   healthCheckPath: /
   apps:
     - name: boutique
-      primaryHealthCheckFqdn: frontend-boutique.apps.primary.aws.validatedpatterns.io
-      secondaryHealthCheckFqdn: frontend-boutique.apps.secondary.aws.validatedpatterns.io
     - name: wordpress
-      primaryHealthCheckFqdn: wordpress-wordpress.apps.primary.aws.validatedpatterns.io
-      secondaryHealthCheckFqdn: wordpress-wordpress.apps.secondary.aws.validatedpatterns.io
+  region: us-west-1
+  primaryHealthCheckFqdn: router-default.apps.primary.aws.validatedpatterns.io
+  secondaryHealthCheckFqdn: router-default.apps.secondary.aws.validatedpatterns.io
