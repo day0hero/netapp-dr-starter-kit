@@ -26,6 +26,8 @@ spec:
 {{/* Per-app health checks and failover records */}}
 {{- range $app := $r53.apps }}
 {{- $hcPath := $app.healthCheckPath | default $r53.healthCheckPath | default "/" }}
+{{- $primaryHcFqdn := default $r53.primaryHealthCheckFqdn $app.primaryHealthCheckFqdn }}
+{{- $secondaryHcFqdn := default $r53.secondaryHealthCheckFqdn $app.secondaryHealthCheckFqdn }}
 ---
 apiVersion: route53.aws.upbound.io/v1beta1
 kind: HealthCheck
@@ -35,7 +37,7 @@ metadata:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
   forProvider:
-    fqdn: {{ $app.primaryHealthCheckFqdn | quote }}
+    fqdn: {{ $primaryHcFqdn | quote }}
     port: 443
     type: HTTPS
     resourcePath: {{ $hcPath | quote }}
@@ -57,7 +59,7 @@ metadata:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
   forProvider:
-    fqdn: {{ $app.secondaryHealthCheckFqdn | quote }}
+    fqdn: {{ $secondaryHcFqdn | quote }}
     port: 443
     type: HTTPS
     resourcePath: {{ $hcPath | quote }}

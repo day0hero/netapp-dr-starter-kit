@@ -127,11 +127,14 @@ route53Failover:
   hostedZoneId: ""
   primaryIngressHostname: ""
   secondaryIngressHostname: ""
+  # Defaults for HTTPS health checks when route53Failover.apps[].primaryHealthCheckFqdn / secondaryHealthCheckFqdn are omitted
+  primaryHealthCheckFqdn: ""
+  secondaryHealthCheckFqdn: ""
   healthCheckPath: "/"
   recordTtl: 60
   apps: []
   #  - name: boutique
-  #    primaryHealthCheckFqdn: frontend-boutique.apps.primary.example.com
+  #    primaryHealthCheckFqdn: frontend-boutique.apps.primary.example.com   # optional; falls back to primaryHealthCheckFqdn above
   #    secondaryHealthCheckFqdn: frontend-boutique.apps.secondary.example.com
   #    healthCheckPath: "/"
   tags:

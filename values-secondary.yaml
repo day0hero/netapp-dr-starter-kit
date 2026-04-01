@@ -61,6 +61,109 @@ clusterGroup:
             hs.message = "Awaiting TridentOrchestrator status."
           end
           return hs
+      # Crossplane FSx: Ready=False during AWS CREATING should be Progressing, not Degraded.
+      - kind: OntapFileSystem
+        group: fsx.aws.upbound.io
+        check: |
+          hs = {}
+          local ready = nil
+          local synced = nil
+          local sync_msg = ""
+          local ready_msg = ""
+          local ready_reason = ""
+          if obj.status ~= nil and obj.status.conditions ~= nil then
+            for i, c in ipairs(obj.status.conditions) do
+              if c.type == "Ready" then
+                ready = c.status
+                ready_reason = c.reason or ""
+                ready_msg = c.message or ""
+              elseif c.type == "Synced" then
+                synced = c.status
+                sync_msg = c.message or ""
+              end
+            end
+          end
+          if synced == "False" then
+            hs.status = "Degraded"
+            hs.message = "Provider sync failed"
+            if sync_msg ~= "" then
+              hs.message = hs.message .. ": " .. sync_msg
+            end
+            return hs
+          end
+          if ready == "True" then
+            hs.status = "Healthy"
+            hs.message = "FSx ONTAP filesystem is ready."
+            return hs
+          end
+          if ready == "False" then
+            local r = string.lower(ready_reason or "")
+            if string.find(r, "error") ~= nil or string.find(r, "fail") ~= nil then
+              hs.status = "Degraded"
+              hs.message = ready_msg ~= "" and ready_msg or ready_reason
+              return hs
+            end
+            hs.status = "Progressing"
+            hs.message = "FSx filesystem provisioning: " .. (ready_reason or "in progress")
+            if ready_msg ~= "" then
+              hs.message = hs.message .. " - " .. ready_msg
+            end
+            return hs
+          end
+          hs.status = "Progressing"
+          hs.message = "Awaiting FSx OntapFileSystem status."
+          return hs
+      - kind: OntapStorageVirtualMachine
+        group: fsx.aws.upbound.io
+        check: |
+          hs = {}
+          local ready = nil
+          local synced = nil
+          local sync_msg = ""
+          local ready_msg = ""
+          local ready_reason = ""
+          if obj.status ~= nil and obj.status.conditions ~= nil then
+            for i, c in ipairs(obj.status.conditions) do
+              if c.type == "Ready" then
+                ready = c.status
+                ready_reason = c.reason or ""
+                ready_msg = c.message or ""
+              elseif c.type == "Synced" then
+                synced = c.status
+                sync_msg = c.message or ""
+              end
+            end
+          end
+          if synced == "False" then
+            hs.status = "Degraded"
+            hs.message = "Provider sync failed"
+            if sync_msg ~= "" then
+              hs.message = hs.message .. ": " .. sync_msg
+            end
+            return hs
+          end
+          if ready == "True" then
+            hs.status = "Healthy"
+            hs.message = "FSx SVM is ready."
+            return hs
+          end
+          if ready == "False" then
+            local r = string.lower(ready_reason or "")
+            if string.find(r, "error") ~= nil or string.find(r, "fail") ~= nil then
+              hs.status = "Degraded"
+              hs.message = ready_msg ~= "" and ready_msg or ready_reason
+              return hs
+            end
+            hs.status = "Progressing"
+            hs.message = "FSx SVM provisioning: " .. (ready_reason or "in progress")
+            if ready_msg ~= "" then
+              hs.message = hs.message .. " - " .. ready_msg
+            end
+            return hs
+          end
+          hs.status = "Progressing"
+          hs.message = "Awaiting FSx OntapStorageVirtualMachine status."
+          return hs
     resourceActions:
       - group: protect.trident.netapp.io
         kind: AppMirrorRelationship
