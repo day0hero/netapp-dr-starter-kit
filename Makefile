@@ -103,8 +103,9 @@ crossplane-setup: ## Discover clusters and write Crossplane values (then commit+
 
 ##@ Crossplane DR Teardown
 
-.PHONY: destroy-dr
-destroy-dr: ## Destroy DR infrastructure (pauses ArgoCD, cleans ONTAP, deletes Crossplane resources)
+.PHONY: destroy-dr dr-destroy
+# dr-destroy is an alias (same recipe as destroy-dr)
+destroy-dr dr-destroy: ## Destroy DR infrastructure (pauses ArgoCD, cleans ONTAP, deletes Crossplane resources)
 	$(call _validate_kubeconfigs,destroy-dr)
 	@echo "=========================================="
 	@echo "WARNING: Destroying DR Infrastructure"

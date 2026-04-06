@@ -167,6 +167,40 @@
       changed_when: false
       failed_when: false
 
+    - name: Try reading LOCAL_SVM and SVM management LIF from Production ConfigMap
+      ansible.builtin.shell: |
+        set -e
+        export KUBECONFIG="{{ prod_kubeconfig }}"
+        for NS in trident trident-protect; do
+          SVM=$(oc get configmap fsx-endpoints -n "${NS}" -o jsonpath='{.data.LOCAL_SVM}' 2>/dev/null || true)
+          MGMT=$(oc get configmap fsx-endpoints -n "${NS}" -o jsonpath='{.data.LOCAL_MGMT_LIF}' 2>/dev/null || true)
+          if [ -n "${SVM}" ] || [ -n "${MGMT}" ]; then
+            printf '%s\n%s\n' "${SVM}" "${MGMT}"
+            exit 0
+          fi
+        done
+        printf '\n\n'
+      register: _prod_cm_svm_meta
+      changed_when: false
+      failed_when: false
+
+    - name: Try reading LOCAL_SVM and SVM management LIF from DR ConfigMap
+      ansible.builtin.shell: |
+        set -e
+        export KUBECONFIG="{{ dr_kubeconfig }}"
+        for NS in trident trident-protect; do
+          SVM=$(oc get configmap fsx-endpoints -n "${NS}" -o jsonpath='{.data.LOCAL_SVM}' 2>/dev/null || true)
+          MGMT=$(oc get configmap fsx-endpoints -n "${NS}" -o jsonpath='{.data.LOCAL_MGMT_LIF}' 2>/dev/null || true)
+          if [ -n "${SVM}" ] || [ -n "${MGMT}" ]; then
+            printf '%s\n%s\n' "${SVM}" "${MGMT}"
+            exit 0
+          fi
+        done
+        printf '\n\n'
+      register: _dr_cm_svm_meta
+      changed_when: false
+      failed_when: false
+
     - name: Fall back to AWS CLI discovery for Production
       ansible.builtin.shell: |
         set -o pipefail
@@ -209,6 +243,10 @@
         _dr_cluster_lif: >-
           {{ (_dr_cm_lif.stdout | default('') | trim) or
              (_dr_aws_lif.stdout | default('') | trim) }}
+        _prod_local_svm: "{{ (_prod_cm_svm_meta.stdout_lines | default(['', '']))[0] | default('') | trim }}"
+        _prod_local_mgmt_lif: "{{ (_prod_cm_svm_meta.stdout_lines | default(['', '']))[1] | default('') | trim }}"
+        _dr_local_svm: "{{ (_dr_cm_svm_meta.stdout_lines | default(['', '']))[0] | default('') | trim }}"
+        _dr_local_mgmt_lif: "{{ (_dr_cm_svm_meta.stdout_lines | default(['', '']))[1] | default('') | trim }}"
         _prod_fsx_name: "{{ _prod_fsx_name }}"
         _dr_fsx_name: "{{ _dr_fsx_name }}"
         cacheable: true
@@ -219,8 +257,12 @@
           - "=========================================="
           - "  FSx Endpoints for Destroy"
           - "=========================================="
-          - "  Production: {{ _prod_cluster_lif | default('NOT FOUND') }}"
-          - "  DR:          {{ _dr_cluster_lif | default('NOT FOUND') }}"
+          - "  Production cluster LIF:  {{ _prod_cluster_lif | default('NOT FOUND') }}"
+          - "  Production SVM mgmt LIF:  {{ _prod_local_mgmt_lif | default('(none)') }}"
+          - "  Production LOCAL_SVM:     {{ _prod_local_svm | default('(none)') }}"
+          - "  DR cluster LIF:           {{ _dr_cluster_lif | default('NOT FOUND') }}"
+          - "  DR SVM mgmt LIF:          {{ _dr_local_mgmt_lif | default('(none)') }}"
+          - "  DR LOCAL_SVM:             {{ _dr_local_svm | default('(none)') }}"
           - "  Prod FSx:    {{ _prod_fsx_name }}"
           - "  DR FSx:      {{ _dr_fsx_name }}"
           - "=========================================="
@@ -266,7 +308,10 @@
         content: |
           #!/bin/bash
           set -o pipefail
-          MGMT="${ONTAP_MGMT}"
+          CLUSTER_MGMT="${ONTAP_MGMT}"
+          SVM_MGMT_LIF="${ONTAP_LOCAL_MGMT_LIF:-}"
+          LOCAL_SVM_NAME="${ONTAP_LOCAL_SVM:-}"
+          MGMT="${CLUSTER_MGMT}"
           AUTH="${ONTAP_AUTH}"
 
           json_val() { python3 -c "import sys,json; d=json.load(sys.stdin); print($1)" 2>/dev/null; }
@@ -277,14 +322,22 @@
           api_del()  { curl -sk -u "${AUTH}" -X DELETE "https://${MGMT}$1" 2>/dev/null; }
           api_patch() { curl -sk -u "${AUTH}" -X PATCH -H 'Content-Type: application/json' -d "$2" "https://${MGMT}$1" 2>/dev/null; }
 
-          echo "=== Testing connectivity to ${MGMT} ==="
+          echo "=== ONTAP endpoints: cluster=${CLUSTER_MGMT} svmLIF=${SVM_MGMT_LIF:-n/a} LOCAL_SVM=${LOCAL_SVM_NAME:-n/a} ==="
+
+          echo "=== Testing connectivity to cluster LIF ${CLUSTER_MGMT} ==="
           HTTP_CODE=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
-            -u "${AUTH}" "https://${MGMT}/api/cluster" 2>/dev/null || echo "000")
+            -u "${AUTH}" "https://${CLUSTER_MGMT}/api/cluster" 2>/dev/null || echo "000")
           if [ "${HTTP_CODE}" = "000" ]; then
-            echo "WARNING: Cannot reach FSx management at ${MGMT} — skipping"
+            echo "WARNING: Cannot reach FSx cluster management at ${CLUSTER_MGMT} — skipping"
             exit 0
           fi
-          echo "Connected (HTTP ${HTTP_CODE})"
+          echo "Cluster LIF OK (HTTP ${HTTP_CODE})"
+
+          if [ -n "${SVM_MGMT_LIF}" ] && [ "${SVM_MGMT_LIF}" != "${CLUSTER_MGMT}" ]; then
+            SVM_HTTP=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 10 \
+              -u "${AUTH}" "https://${SVM_MGMT_LIF}/api/cluster" 2>/dev/null || echo "000")
+            echo "SVM management LIF ${SVM_MGMT_LIF} -> /api/cluster HTTP ${SVM_HTTP} (peer cleanup will also use this IP)"
+          fi
 
           echo "=== Cleaning up SnapMirror relationships ==="
           SM_UUIDS=$(api_get "/api/snapmirror/relationships?fields=uuid,state" \
@@ -360,14 +413,156 @@
             done
           fi
 
-          echo "=== Deleting SVM peers ==="
-          for UUID in $(api_get "/api/svm/peers?fields=uuid" | json_arr "r.get('uuid','')"); do
-            echo "  DELETE SVM peer ${UUID}..." && api_del "/api/svm/peers/${UUID}" >/dev/null
-          done
-          for i in $(seq 1 24); do
-            COUNT=$(api_get "/api/svm/peers" | json_val "d.get('num_records',0)")
-            [ "${COUNT}" = "0" ] && echo "  All SVM peers removed" && break
-            echo "  ${COUNT} remaining (${i}/24)..." && sleep 5
+          # FSx blocks SVM deletion until SVM peers are gone. REST /api/svm/peers may be empty on the
+          # cluster management LIF while AWS still sees peers — always hit the SVM management LIF too
+          # (LOCAL_MGMT_LIF from fsx-endpoints) and always run private CLI vserver peer show/delete.
+
+          rest_svm_peer_count() {
+            local ep="$1"
+            curl -sk -u "${AUTH}" "https://${ep}/api/svm/peers" 2>/dev/null \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('num_records',0))" 2>/dev/null || echo "999"
+          }
+
+          private_peer_show_count() {
+            local ep="$1"
+            local suffix="$2"
+            curl -sk -u "${AUTH}" "https://${ep}/api/private/cli/vserver/peer/show${suffix}" 2>/dev/null \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('num_records',0))" 2>/dev/null || echo "999"
+          }
+
+          svm_peer_sweep_on_endpoint() {
+            local EP="$1"
+            local LABEL="$2"
+            local ROUND PEER_UNF PEER_FIL UUIDS HTTP ENC VSUF SHOW_ALL SHOW_VS CLI_PAIRS
+            echo "  --- ${LABEL} @ ${EP} ---"
+            ENC=""
+            if [ -n "${LOCAL_SVM_NAME}" ]; then
+              ENC=$(LOCAL_SVM_NAME="${LOCAL_SVM_NAME}" python3 -c "import os,urllib.parse; print(urllib.parse.quote(os.environ['LOCAL_SVM_NAME'], safe=''))" 2>/dev/null)
+            fi
+            for ROUND in $(seq 1 10); do
+              PEER_UNF=$(curl -sk -u "${AUTH}" "https://${EP}/api/svm/peers?fields=uuid,state,svm,peer" 2>/dev/null)
+              PEER_FIL=""
+              if [ -n "${ENC}" ]; then
+                PEER_FIL=$(curl -sk -u "${AUTH}" "https://${EP}/api/svm/peers?fields=uuid,state,svm,peer&svm.name=${ENC}" 2>/dev/null)
+              fi
+              UUIDS=$(PEER_UNF="${PEER_UNF}" PEER_FIL="${PEER_FIL}" python3 -c "
+          import json, os
+          uuids=set()
+          for key in ('PEER_UNF', 'PEER_FIL'):
+              raw=os.environ.get(key, '').strip()
+              if not raw:
+                  continue
+              try:
+                  d=json.loads(raw)
+                  for r in d.get('records', []):
+                      u=r.get('uuid')
+                      if u:
+                          uuids.add(u)
+              except Exception:
+                  pass
+          for u in sorted(uuids):
+              print(u)
+          " 2>/dev/null)
+              if [ -n "${UUIDS}" ]; then
+                echo "    ${LABEL} r${ROUND}: REST peer UUIDs: $(echo "${UUIDS}" | tr '\n' ' ')"
+              fi
+              for PUUID in ${UUIDS}; do
+                [ -z "${PUUID}" ] && continue
+                echo "      REST DELETE ${PUUID} (force in JSON body — FSx/ONTAP ignores ?force= query)..."
+                HTTP=$(curl -sk -o /dev/null -u "${AUTH}" -X DELETE -w '%{http_code}' \
+                  -H 'Content-Type: application/json' -d '{"force": true}' \
+                  "https://${EP}/api/svm/peers/${PUUID}?return_timeout=120" 2>/dev/null || echo "000")
+                if [ "${HTTP}" != "200" ] && [ "${HTTP}" != "202" ]; then
+                  echo "      retry DELETE without body (HTTP ${HTTP})..."
+                  curl -sk -o /dev/null -u "${AUTH}" -X DELETE \
+                    "https://${EP}/api/svm/peers/${PUUID}?return_timeout=120" 2>/dev/null || true
+                fi
+              done
+              VSUF=""
+              if [ -n "${ENC}" ]; then
+                VSUF="?vserver=${ENC}"
+              fi
+              SHOW_ALL=$(curl -sk -u "${AUTH}" "https://${EP}/api/private/cli/vserver/peer/show" 2>/dev/null)
+              SHOW_VS=""
+              if [ -n "${VSUF}" ]; then
+                SHOW_VS=$(curl -sk -u "${AUTH}" "https://${EP}/api/private/cli/vserver/peer/show${VSUF}" 2>/dev/null)
+              fi
+              CLI_PAIRS=$(SHOW_ALL="${SHOW_ALL}" SHOW_VS="${SHOW_VS}" python3 -c "
+          import json, urllib.parse, os
+          pairs=set()
+          for key in ('SHOW_ALL', 'SHOW_VS'):
+              raw=os.environ.get(key, '').strip()
+              if not raw:
+                  continue
+              try:
+                  d=json.loads(raw)
+                  for r in d.get('records', []):
+                      vs = r.get('vserver') or r.get('vserver_name')
+                      pv = (
+                          r.get('peer_vserver')
+                          or r.get('peer-vserver')
+                          or r.get('peer_vserver_name')
+                          or r.get('Peer Vserver')
+                      )
+                      if vs and pv:
+                          pairs.add((str(vs), str(pv)))
+              except Exception:
+                  pass
+          for vs, pv in sorted(pairs):
+              print(urllib.parse.quote(vs, safe='') + '|' + urllib.parse.quote(pv, safe=''))
+          " 2>/dev/null)
+              if [ -n "${CLI_PAIRS}" ]; then
+                echo "    ${LABEL} r${ROUND}: private CLI peer pairs from vserver peer show"
+              fi
+              echo "${CLI_PAIRS}" | while IFS='|' read -r QVS QPV; do
+                [ -z "${QVS}" ] && continue
+                echo "      private CLI vserver peer delete vserver=${QVS} peer-vserver=${QPV}..."
+                curl -sk -o /dev/null -u "${AUTH}" -X POST \
+                  "https://${EP}/api/private/cli/vserver/peer/delete?vserver=${QVS}&peer-vserver=${QPV}" \
+                  2>/dev/null || true
+              done
+              RREST=$(rest_svm_peer_count "${EP}")
+              RCLI=$(private_peer_show_count "${EP}" "")
+              RCLI2=0
+              if [ -n "${VSUF}" ]; then
+                RCLI2=$(private_peer_show_count "${EP}" "${VSUF}")
+              fi
+              if [ "${RREST}" = "0" ] && [ "${RCLI}" = "0" ] && [ "${RCLI2}" = "0" ]; then
+                echo "    ${LABEL}: REST and private CLI show no peers (round ${ROUND})"
+                return 0
+              fi
+              echo "    ${LABEL} r${ROUND}: rest=${RREST} cli(show)=${RCLI} cli(vs)=${RCLI2} — sleeping..."
+              sleep 10
+            done
+            echo "    WARNING: ${LABEL}: peers may remain after max rounds"
+            return 1
+          }
+
+          svm_peer_sweep_both_lifs() {
+            local TAG="$1"
+            svm_peer_sweep_on_endpoint "${CLUSTER_MGMT}" "${TAG} cluster-LIF" || true
+            if [ -n "${SVM_MGMT_LIF}" ] && [ "${SVM_MGMT_LIF}" != "${CLUSTER_MGMT}" ]; then
+              svm_peer_sweep_on_endpoint "${SVM_MGMT_LIF}" "${TAG} svm-LIF" || true
+            fi
+          }
+
+          rest_peers_total() {
+            local a b
+            a=$(rest_svm_peer_count "${CLUSTER_MGMT}")
+            b=0
+            if [ -n "${SVM_MGMT_LIF}" ] && [ "${SVM_MGMT_LIF}" != "${CLUSTER_MGMT}" ]; then
+              b=$(rest_svm_peer_count "${SVM_MGMT_LIF}")
+            fi
+            echo $((a + b))
+          }
+
+          echo "=== Deleting SVM peers (before cluster peers) ==="
+          svm_peer_sweep_both_lifs "pre-cluster"
+
+          for i in $(seq 1 30); do
+            T=$(rest_peers_total)
+            [ "${T}" = "0" ] && echo "  All REST svm peers clear on cluster + svm LIFs (pre-cluster)" && break
+            echo "  REST svm peers total ${T} (${i}/30)..." && sleep 5
           done
 
           echo "=== Deleting cluster peers ==="
@@ -383,60 +578,74 @@
             sleep 10
           done
 
+          echo "=== Deleting SVM peers (second sweep after cluster peers) ==="
+          svm_peer_sweep_both_lifs "post-cluster"
+
+          for i in $(seq 1 30); do
+            T=$(rest_peers_total)
+            [ "${T}" = "0" ] && echo "  All REST svm peers clear (final)" && break
+            echo "  REST svm peers total ${T} (${i}/30)..." && sleep 5
+          done
+
           echo "=== ONTAP cleanup complete ==="
       when: fsx_admin_password is defined and fsx_admin_password != ''
 
-    - name: Remove ONTAP peering from Production FSx
+    - name: Remove ONTAP peering from Production and DR (two passes per cluster)
       ansible.builtin.shell: |
         set -o pipefail
         B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
-        echo ">>> Launching unpeer pod on Production cluster ({{ _prod_cluster_lif }})..."
-        KUBECONFIG="{{ prod_kubeconfig }}" oc run ontap-unpeer-prod \
-          --rm --restart=Never --attach=true \
-          --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
-          --env="ONTAP_MGMT={{ _prod_cluster_lif }}" \
-          --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
-          --env="SCRIPT_B64=${B64}" \
-          --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
-          -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
-        echo ">>> Production unpeer complete (rc=$?)"
-      register: _prod_unpeer
+        for PASS in 1 2; do
+          echo "=========================================="
+          echo ">>> ONTAP cleanup pass ${PASS} / DR first ({{ _dr_cluster_lif }})"
+          echo "=========================================="
+          if [ -n "{{ _dr_cluster_lif | default('') | trim }}" ]; then
+            KUBECONFIG="{{ dr_kubeconfig }}" oc run "ontap-unpeer-dr-${PASS}" \
+              --rm --restart=Never --attach=true \
+              --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
+              --env="ONTAP_MGMT={{ _dr_cluster_lif }}" \
+              --env="ONTAP_LOCAL_SVM={{ _dr_local_svm | default('') }}" \
+              --env="ONTAP_LOCAL_MGMT_LIF={{ _dr_local_mgmt_lif | default('') }}" \
+              --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
+              --env="SCRIPT_B64=${B64}" \
+              --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":900}}' \
+              -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash' || true
+          else
+            echo "SKIP: no DR cluster LIF"
+          fi
+          echo "=========================================="
+          echo ">>> ONTAP cleanup pass ${PASS} / Production ({{ _prod_cluster_lif }})"
+          echo "=========================================="
+          if [ -n "{{ _prod_cluster_lif | default('') | trim }}" ]; then
+            KUBECONFIG="{{ prod_kubeconfig }}" oc run "ontap-unpeer-prod-${PASS}" \
+              --rm --restart=Never --attach=true \
+              --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
+              --env="ONTAP_MGMT={{ _prod_cluster_lif }}" \
+              --env="ONTAP_LOCAL_SVM={{ _prod_local_svm | default('') }}" \
+              --env="ONTAP_LOCAL_MGMT_LIF={{ _prod_local_mgmt_lif | default('') }}" \
+              --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
+              --env="SCRIPT_B64=${B64}" \
+              --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":900}}' \
+              -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash' || true
+          else
+            echo "SKIP: no production cluster LIF"
+          fi
+          if [ "${PASS}" = "1" ]; then
+            echo ">>> Waiting between passes..."
+            sleep 30
+          fi
+        done
+        echo ">>> All ONTAP unpeer passes complete"
+      register: _ontap_unpeer_all
       changed_when: true
       failed_when: false
       when:
         - fsx_admin_password is defined and fsx_admin_password != ''
-        - _prod_cluster_lif | default('') | trim != ''
+        - (_prod_cluster_lif | default('') | trim != '') or (_dr_cluster_lif | default('') | trim != '')
 
-    - name: Display Production unpeer output
+    - name: Display ONTAP unpeer output
       ansible.builtin.debug:
-        var: _prod_unpeer.stdout_lines
-      when: _prod_unpeer is not skipped and _prod_unpeer.stdout is defined
-
-    - name: Remove ONTAP peering from DR FSx
-      ansible.builtin.shell: |
-        set -o pipefail
-        B64=$(base64 -w0 /tmp/ontap-unpeer.sh)
-        echo ">>> Launching unpeer pod on DR cluster ({{ _dr_cluster_lif }})..."
-        KUBECONFIG="{{ dr_kubeconfig }}" oc run ontap-unpeer-dr \
-          --rm --restart=Never --attach=true \
-          --image=image-registry.openshift-image-registry.svc:5000/openshift/tools \
-          --env="ONTAP_MGMT={{ _dr_cluster_lif }}" \
-          --env="ONTAP_AUTH=fsxadmin:{{ fsx_admin_password }}" \
-          --env="SCRIPT_B64=${B64}" \
-          --overrides='{"spec":{"terminationGracePeriodSeconds":0,"activeDeadlineSeconds":300}}' \
-          -- bash -c 'echo ${SCRIPT_B64} | base64 -d | bash'
-        echo ">>> DR unpeer complete (rc=$?)"
-      register: _dr_unpeer
-      changed_when: true
-      failed_when: false
-      when:
-        - fsx_admin_password is defined and fsx_admin_password != ''
-        - _dr_cluster_lif | default('') | trim != ''
-
-    - name: Display DR unpeer output
-      ansible.builtin.debug:
-        var: _dr_unpeer.stdout_lines
-      when: _dr_unpeer is not skipped and _dr_unpeer.stdout is defined
+        var: _ontap_unpeer_all.stdout_lines
+      when: _ontap_unpeer_all is not skipped and _ontap_unpeer_all.stdout is defined
 
     - name: Clean up unpeer script
       ansible.builtin.file:
@@ -653,7 +862,7 @@
     - name: Delete FSx SVMs
       ansible.builtin.shell: |
         echo "--- FSx SVMs ---"
-        KUBECONFIG="{{ prod_kubeconfig }}" oc delete ontapstoragevirtualmachine.fsx.aws.upbound.io \
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete ontapstoragevirtualmachines.fsx.aws.upbound.io \
           --all --ignore-not-found 2>/dev/null || true
       changed_when: true
       failed_when: false
@@ -661,14 +870,14 @@
     - name: Wait for SVM deletion (up to 10m)
       ansible.builtin.shell: >-
         KUBECONFIG="{{ prod_kubeconfig }}" oc wait --for=delete
-        ontapstoragevirtualmachine.fsx.aws.upbound.io --all --timeout=600s 2>/dev/null || true
+        ontapstoragevirtualmachines.fsx.aws.upbound.io --all --timeout=600s 2>/dev/null || true
       changed_when: false
       failed_when: false
 
     - name: Delete FSx filesystems
       ansible.builtin.shell: |
         echo "--- FSx filesystems ---"
-        KUBECONFIG="{{ prod_kubeconfig }}" oc delete ontapfilesystem.fsx.aws.upbound.io \
+        KUBECONFIG="{{ prod_kubeconfig }}" oc delete ontapfilesystems.fsx.aws.upbound.io \
           --all --ignore-not-found 2>/dev/null || true
       changed_when: true
       failed_when: false
@@ -676,7 +885,7 @@
     - name: Wait for filesystem deletion (up to 30m)
       ansible.builtin.shell: >-
         KUBECONFIG="{{ prod_kubeconfig }}" oc wait --for=delete
-        ontapfilesystem.fsx.aws.upbound.io --all --timeout=1800s 2>/dev/null || true
+        ontapfilesystems.fsx.aws.upbound.io --all --timeout=1800s 2>/dev/null || true
       changed_when: false
       failed_when: false
 
