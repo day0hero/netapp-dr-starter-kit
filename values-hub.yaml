@@ -473,16 +473,16 @@ fsxOntap:
     enabled: true
     region: us-west-2
     fileSystemName: secondary-us-west-2-fsx
-    vpcId: vpc-04367ed69a97931c3
+    vpcId: vpc-067f0e71c20ed7f87
     subnetIds:
-      - subnet-0e5eb4ffe543fbe5b
-      - subnet-0b992181deb88f0b9
+      - subnet-0a7af89489f95c837
+      - subnet-0ed2b952a160b5135
     routeTableIds:
-      - rtb-08cf18f5db54c8413
-      - rtb-0d279a771a3839dfa
-      - rtb-04b3ddc21e099b0b8
-      - rtb-078dc892b49a4dd79
-    preferredSubnetId: subnet-0e5eb4ffe543fbe5b
+      - rtb-00d065665fea1a710
+      - rtb-04dcd105995ff6697
+      - rtb-024bf11d08c77117d
+      - rtb-0a5842762dc10a450
+    preferredSubnetId: subnet-0a7af89489f95c837
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -515,16 +515,16 @@ vpcPeering:
       - rtb-027c5d854d53eb63a
   dr:
     region: us-west-2
-    vpcId: vpc-04367ed69a97931c3
+    vpcId: vpc-067f0e71c20ed7f87
     vpcCidr: 10.100.0.0/16
     clusterName: secondary
     routeTableIds:
-      - rtb-04b3ded48337bf7fb
-      - rtb-0593653e79731bf8c
-      - rtb-08cf18f5db54c8413
-      - rtb-0d279a771a3839dfa
-      - rtb-04b3ddc21e099b0b8
-      - rtb-078dc892b49a4dd79
+      - rtb-00d065665fea1a710
+      - rtb-04dcd105995ff6697
+      - rtb-024bf11d08c77117d
+      - rtb-08f253f0aaa68d0cb
+      - rtb-0a5842762dc10a450
+      - rtb-09f2a37e6d8a13ed0
 route53Failover:
   enabled: true
   domain: dr.aws.validatedpatterns.io
