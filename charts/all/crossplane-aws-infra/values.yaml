@@ -128,6 +128,11 @@ route53Failover:
   # failures when health check IDs churn. Set true only if apps need different
   # health-check targets per app.
   perAppHealthChecks: false
+  # When true and hostedZoneId is set (not createHostedZone), Record CRs get
+  # crossplane.io/external-name (Terraform import id) so Crossplane adopts existing
+  # failover records instead of failing with "already exists". Set false for a
+  # brand-new zone where those record sets truly do not exist yet.
+  importExistingRecords: true
   domain: ""
   # If false, you must set hostedZoneId to an existing public zone for `domain` (Crossplane cannot create records without it).
   createHostedZone: true

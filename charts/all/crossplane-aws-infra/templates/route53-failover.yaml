@@ -2,6 +2,7 @@
 {{- $providerConfigRef := .Values.global.providerConfigRef }}
 {{- $r53 := .Values.route53Failover }}
 {{- $perAppHc := $r53.perAppHealthChecks | default false }}
+{{- $importRecords := and (not $r53.createHostedZone) ($r53.importExistingRecords | default true) }}
 {{- $hcPath := $r53.healthCheckPath | default "/" }}
 {{- $primaryHcFqdn := $r53.primaryHealthCheckFqdn }}
 {{- $secondaryHcFqdn := $r53.secondaryHealthCheckFqdn }}
@@ -87,6 +88,9 @@ metadata:
   name: {{ $app.name }}-primary
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    {{- if $importRecords }}
+    crossplane.io/external-name: {{ include "crossplane-aws-infra.route53RecordExternalName" (dict "zoneId" $r53.hostedZoneId "recordName" (printf "%s.%s" $app.name $r53.domain) "setIdentifier" (printf "%s-primary" $app.name)) | quote }}
+    {{- end }}
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
@@ -116,6 +120,9 @@ metadata:
   name: {{ $app.name }}-secondary
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    {{- if $importRecords }}
+    crossplane.io/external-name: {{ include "crossplane-aws-infra.route53RecordExternalName" (dict "zoneId" $r53.hostedZoneId "recordName" (printf "%s.%s" $app.name $r53.domain) "setIdentifier" (printf "%s-secondary" $app.name)) | quote }}
+    {{- end }}
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
@@ -201,6 +208,9 @@ metadata:
   name: {{ $app.name }}-primary
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    {{- if $importRecords }}
+    crossplane.io/external-name: {{ include "crossplane-aws-infra.route53RecordExternalName" (dict "zoneId" $r53.hostedZoneId "recordName" (printf "%s.%s" $app.name $r53.domain) "setIdentifier" (printf "%s-primary" $app.name)) | quote }}
+    {{- end }}
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
@@ -230,6 +240,9 @@ metadata:
   name: {{ $app.name }}-secondary
   annotations:
     argocd.argoproj.io/sync-wave: "1"
+    {{- if $importRecords }}
+    crossplane.io/external-name: {{ include "crossplane-aws-infra.route53RecordExternalName" (dict "zoneId" $r53.hostedZoneId "recordName" (printf "%s.%s" $app.name $r53.domain) "setIdentifier" (printf "%s-secondary" $app.name)) | quote }}
+    {{- end }}
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:

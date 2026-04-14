@@ -15,6 +15,14 @@ providerConfigRef:
 {{- end }}
 
 {{/*
+Terraform aws_route53_record import ID / Crossplane external-name (hashicorp/aws createRecordImportID).
+Required to adopt failover CNAME sets that already exist in Route53 (avoids InvalidChangeBatch "already exists").
+*/}}
+{{- define "crossplane-aws-infra.route53RecordExternalName" -}}
+{{- printf "%s_%s_CNAME_%s" .zoneId (lower .recordName) .setIdentifier }}
+{{- end }}
+
+{{/*
 Build the list of FSx instances to create (local + optional peer).
 Returns a list of dicts, each with the full config for one FSx instance.
 */}}
