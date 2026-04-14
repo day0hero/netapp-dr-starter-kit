@@ -453,14 +453,14 @@ fsxOntap:
   enabled: true
   region: us-west-1
   fileSystemName: primary-us-west-1-fsx
-  vpcId: vpc-0b20378d978812b38
+  vpcId: vpc-05e3811073a7d5399
   subnetIds:
-    - subnet-0ee36e869d5d7888f
-    - subnet-0b8b471177e57c605
+    - subnet-06ed003e57776ed68
+    - subnet-0c5fd4764ee22d1f6
   routeTableIds:
-    - rtb-0f81ad3483d863b7b
-    - rtb-027c5d854d53eb63a
-  preferredSubnetId: subnet-0ee36e869d5d7888f
+    - rtb-02e3c49ffc2e3126d
+    - rtb-08e8eb0d4f7a7cfbc
+  preferredSubnetId: subnet-06ed003e57776ed68
   allowedCidrs:
     - 10.0.0.0/16
     - 10.100.0.0/16
@@ -473,16 +473,16 @@ fsxOntap:
     enabled: true
     region: us-west-2
     fileSystemName: secondary-us-west-2-fsx
-    vpcId: vpc-067f0e71c20ed7f87
+    vpcId: vpc-0fc34eb9fef65aafd
     subnetIds:
-      - subnet-0a7af89489f95c837
-      - subnet-0ed2b952a160b5135
+      - subnet-0d349edc60919a51d
+      - subnet-0a0b468e44d8474a1
     routeTableIds:
-      - rtb-00d065665fea1a710
-      - rtb-04dcd105995ff6697
-      - rtb-024bf11d08c77117d
-      - rtb-0a5842762dc10a450
-    preferredSubnetId: subnet-0a7af89489f95c837
+      - rtb-066df61691b766369
+      - rtb-050f663e350e1f7eb
+      - rtb-0b2791698620dd377
+      - rtb-02cf943c14f1a7dde
+    preferredSubnetId: subnet-0d349edc60919a51d
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -505,26 +505,26 @@ vpcPeering:
   enabled: true
   prod:
     region: us-west-1
-    vpcId: vpc-0b20378d978812b38
+    vpcId: vpc-05e3811073a7d5399
     vpcCidr: 10.0.0.0/16
     clusterName: primary
     routeTableIds:
-      - rtb-0f3227cbadc03092d
-      - rtb-0f81ad3483d863b7b
-      - rtb-0c403bbb53cc2c137
-      - rtb-027c5d854d53eb63a
+      - rtb-02e3c49ffc2e3126d
+      - rtb-06df22926e02ae054
+      - rtb-08e8eb0d4f7a7cfbc
+      - rtb-0abcbd663e7e256e8
   dr:
     region: us-west-2
-    vpcId: vpc-067f0e71c20ed7f87
+    vpcId: vpc-0fc34eb9fef65aafd
     vpcCidr: 10.100.0.0/16
     clusterName: secondary
     routeTableIds:
-      - rtb-00d065665fea1a710
-      - rtb-04dcd105995ff6697
-      - rtb-024bf11d08c77117d
-      - rtb-08f253f0aaa68d0cb
-      - rtb-0a5842762dc10a450
-      - rtb-09f2a37e6d8a13ed0
+      - rtb-066df61691b766369
+      - rtb-050f663e350e1f7eb
+      - rtb-072591298daa40833
+      - rtb-0b2791698620dd377
+      - rtb-02cf943c14f1a7dde
+      - rtb-070e6d2135c403772
 route53Failover:
   enabled: true
   domain: dr.aws.validatedpatterns.io
