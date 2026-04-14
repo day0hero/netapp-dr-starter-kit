@@ -1,6 +1,10 @@
 {{- if .Values.route53Failover.enabled }}
 {{- $providerConfigRef := .Values.global.providerConfigRef }}
 {{- $r53 := .Values.route53Failover }}
+{{- $perAppHc := $r53.perAppHealthChecks | default false }}
+{{- $hcPath := $r53.healthCheckPath | default "/" }}
+{{- $primaryHcFqdn := $r53.primaryHealthCheckFqdn }}
+{{- $secondaryHcFqdn := $r53.secondaryHealthCheckFqdn }}
 
 {{/* Hosted Zone */}}
 {{- if $r53.createHostedZone }}
@@ -9,6 +13,8 @@ apiVersion: route53.aws.upbound.io/v1beta1
 kind: Zone
 metadata:
   name: dr-{{ $r53.domain | replace "." "-" }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
@@ -23,24 +29,138 @@ spec:
     name: {{ $providerConfigRef }}
 {{- end }}
 
-{{/* Per-app health checks and failover records */}}
-{{- range $app := $r53.apps }}
-{{- $hcPath := $app.healthCheckPath | default $r53.healthCheckPath | default "/" }}
-{{- $primaryHcFqdn := default $r53.primaryHealthCheckFqdn $app.primaryHealthCheckFqdn }}
-{{- $secondaryHcFqdn := default $r53.secondaryHealthCheckFqdn $app.secondaryHealthCheckFqdn }}
+{{- if not $perAppHc }}
+{{/* One shared health check per cluster ingress (matches terraform/route53-failover) */}}
 ---
 apiVersion: route53.aws.upbound.io/v1beta1
 kind: HealthCheck
 metadata:
-  name: {{ $app.name }}-primary-hc
+  name: r53-failover-primary-hc
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
   labels:
-    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
   forProvider:
     fqdn: {{ $primaryHcFqdn | quote }}
     port: 443
     type: HTTPS
     resourcePath: {{ $hcPath | quote }}
+    failureThreshold: 3
+    requestInterval: 30
+    tags:
+      Name: r53-failover-primary-hc
+      {{- range $k, $v := $r53.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: HealthCheck
+metadata:
+  name: r53-failover-secondary-hc
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  forProvider:
+    fqdn: {{ $secondaryHcFqdn | quote }}
+    port: 443
+    type: HTTPS
+    resourcePath: {{ $hcPath | quote }}
+    failureThreshold: 3
+    requestInterval: 30
+    tags:
+      Name: r53-failover-secondary-hc
+      {{- range $k, $v := $r53.tags }}
+      {{ $k }}: {{ $v | quote }}
+      {{- end }}
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- range $app := $r53.apps }}
+---
+apiVersion: route53.aws.upbound.io/v1beta2
+kind: Record
+metadata:
+  name: {{ $app.name }}-primary
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    {{- if $r53.createHostedZone }}
+    zoneIdRef:
+      name: dr-{{ $r53.domain | replace "." "-" }}
+    {{- else }}
+    zoneId: {{ required "route53Failover.hostedZoneId is required when route53Failover.createHostedZone is false — set it to the Route53 hosted zone ID for route53Failover.domain (e.g. Z123... from AWS console or list-hosted-zones)" $r53.hostedZoneId | quote }}
+    {{- end }}
+    name: {{ $app.name }}.{{ $r53.domain }}
+    type: CNAME
+    ttl: {{ $r53.recordTtl }}
+    setIdentifier: {{ $app.name }}-primary
+    failoverRoutingPolicy:
+      type: PRIMARY
+    records:
+      - {{ $r53.primaryIngressHostname | quote }}
+    healthCheckIdRef:
+      name: r53-failover-primary-hc
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+---
+apiVersion: route53.aws.upbound.io/v1beta2
+kind: Record
+metadata:
+  name: {{ $app.name }}-secondary
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    {{- if $r53.createHostedZone }}
+    zoneIdRef:
+      name: dr-{{ $r53.domain | replace "." "-" }}
+    {{- else }}
+    zoneId: {{ required "route53Failover.hostedZoneId is required when route53Failover.createHostedZone is false — set it to the Route53 hosted zone ID for route53Failover.domain (e.g. Z123... from AWS console or list-hosted-zones)" $r53.hostedZoneId | quote }}
+    {{- end }}
+    name: {{ $app.name }}.{{ $r53.domain }}
+    type: CNAME
+    ttl: {{ $r53.recordTtl }}
+    setIdentifier: {{ $app.name }}-secondary
+    failoverRoutingPolicy:
+      type: SECONDARY
+    records:
+      - {{ $r53.secondaryIngressHostname | quote }}
+    healthCheckIdRef:
+      name: r53-failover-secondary-hc
+  providerConfigRef:
+    name: {{ $providerConfigRef }}
+{{- end }}
+
+{{- else }}
+{{/* Per-app health checks (legacy); use only when apps need distinct check targets */}}
+{{- range $app := $r53.apps }}
+{{- $appHcPath := $app.healthCheckPath | default $r53.healthCheckPath | default "/" }}
+{{- $appPrimaryFqdn := default $r53.primaryHealthCheckFqdn $app.primaryHealthCheckFqdn }}
+{{- $appSecondaryFqdn := default $r53.secondaryHealthCheckFqdn $app.secondaryHealthCheckFqdn }}
+---
+apiVersion: route53.aws.upbound.io/v1beta1
+kind: HealthCheck
+metadata:
+  name: {{ $app.name }}-primary-hc
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+spec:
+  forProvider:
+    fqdn: {{ $appPrimaryFqdn | quote }}
+    port: 443
+    type: HTTPS
+    resourcePath: {{ $appHcPath | quote }}
     failureThreshold: 3
     requestInterval: 30
     tags:
@@ -55,14 +175,16 @@ apiVersion: route53.aws.upbound.io/v1beta1
 kind: HealthCheck
 metadata:
   name: {{ $app.name }}-secondary-hc
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
   forProvider:
-    fqdn: {{ $secondaryHcFqdn | quote }}
+    fqdn: {{ $appSecondaryFqdn | quote }}
     port: 443
     type: HTTPS
-    resourcePath: {{ $hcPath | quote }}
+    resourcePath: {{ $appHcPath | quote }}
     failureThreshold: 3
     requestInterval: 30
     tags:
@@ -77,6 +199,8 @@ apiVersion: route53.aws.upbound.io/v1beta2
 kind: Record
 metadata:
   name: {{ $app.name }}-primary
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
@@ -104,6 +228,8 @@ apiVersion: route53.aws.upbound.io/v1beta2
 kind: Record
 metadata:
   name: {{ $app.name }}-secondary
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
@@ -126,6 +252,7 @@ spec:
       name: {{ $app.name }}-secondary-hc
   providerConfigRef:
     name: {{ $providerConfigRef }}
+{{- end }}
 {{- end }}
 
 {{- end }}

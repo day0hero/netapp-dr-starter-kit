@@ -527,6 +527,7 @@ vpcPeering:
       - rtb-070e6d2135c403772
 route53Failover:
   enabled: true
+  perAppHealthChecks: false
   domain: dr.aws.validatedpatterns.io
   # If false: set hostedZoneId to the Route53 zone ID for `domain` (see ansible dr_failover_hosted_zone_id or AWS console).
   # If true: Crossplane creates the zone; delegate NS at the parent registrar.

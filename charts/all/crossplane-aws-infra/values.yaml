@@ -122,6 +122,12 @@ vpcPeering:
 # ---------------------------------------------------------------------------
 route53Failover:
   enabled: false
+  # When false (default), one primary + one secondary health check is shared by all
+  # apps (same as terraform/route53-failover). This avoids duplicate HTTPS checks
+  # against the same router FQDN and reduces Crossplane/Route53 "already exists"
+  # failures when health check IDs churn. Set true only if apps need different
+  # health-check targets per app.
+  perAppHealthChecks: false
   domain: ""
   # If false, you must set hostedZoneId to an existing public zone for `domain` (Crossplane cannot create records without it).
   createHostedZone: true
