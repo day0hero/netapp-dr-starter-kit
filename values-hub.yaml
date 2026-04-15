@@ -473,16 +473,16 @@ fsxOntap:
     enabled: true
     region: us-west-2
     fileSystemName: secondary-us-west-2-fsx
-    vpcId: vpc-0fc34eb9fef65aafd
+    vpcId: vpc-00d13f16027930923
     subnetIds:
-      - subnet-0d349edc60919a51d
-      - subnet-0a0b468e44d8474a1
+      - subnet-05d4c961e141fc681
+      - subnet-0aa0df850fe858b1c
     routeTableIds:
-      - rtb-066df61691b766369
-      - rtb-050f663e350e1f7eb
-      - rtb-0b2791698620dd377
-      - rtb-02cf943c14f1a7dde
-    preferredSubnetId: subnet-0d349edc60919a51d
+      - rtb-0cdf9b54ab37f4b59
+      - rtb-0e2d0cfe972996348
+      - rtb-07d067fae8f14dc49
+      - rtb-065ce8c4d5c73c2b4
+    preferredSubnetId: subnet-05d4c961e141fc681
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -515,16 +515,16 @@ vpcPeering:
       - rtb-0abcbd663e7e256e8
   dr:
     region: us-west-2
-    vpcId: vpc-0fc34eb9fef65aafd
+    vpcId: vpc-00d13f16027930923
     vpcCidr: 10.100.0.0/16
     clusterName: secondary
     routeTableIds:
-      - rtb-066df61691b766369
-      - rtb-050f663e350e1f7eb
-      - rtb-072591298daa40833
-      - rtb-0b2791698620dd377
-      - rtb-02cf943c14f1a7dde
-      - rtb-070e6d2135c403772
+      - rtb-0cdf9b54ab37f4b59
+      - rtb-0e3522cfc2f71ec58
+      - rtb-0c988c6126b0b5288
+      - rtb-0e2d0cfe972996348
+      - rtb-07d067fae8f14dc49
+      - rtb-065ce8c4d5c73c2b4
 route53Failover:
   enabled: true
   perAppHealthChecks: false
