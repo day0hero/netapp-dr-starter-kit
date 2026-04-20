@@ -453,14 +453,14 @@ fsxOntap:
   enabled: true
   region: us-west-1
   fileSystemName: primary-us-west-1-fsx
-  vpcId: vpc-047cdef79ad83d14b
+  vpcId: vpc-0d1fa42adb716fbbd
   subnetIds:
-    - subnet-0d84ac2c8da0f30ad
-    - subnet-044485d51be3e360d
+    - subnet-0f68e14b7daf48b0c
+    - subnet-0558344b4e46f8923
   routeTableIds:
-    - rtb-0d48d5435213f32d1
-    - rtb-0b3969143f264a721
-  preferredSubnetId: subnet-0d84ac2c8da0f30ad
+    - rtb-06a3f61f806824a92
+    - rtb-0285249c29acc85df
+  preferredSubnetId: subnet-0f68e14b7daf48b0c
   allowedCidrs:
     - 10.0.0.0/16
     - 10.100.0.0/16
@@ -473,16 +473,16 @@ fsxOntap:
     enabled: true
     region: us-west-2
     fileSystemName: secondary-us-west-2-fsx
-    vpcId: vpc-0ea2e5c8cc8fa21bd
+    vpcId: vpc-057f2ed1c7ca70c98
     subnetIds:
-      - subnet-0e6675a45026d5400
-      - subnet-02f5af8face541f91
+      - subnet-0f3cf1fa33788c126
+      - subnet-0e7a65189302a1598
     routeTableIds:
-      - rtb-032f3b7ec7baa4e96
-      - rtb-0e02d6d9eccdb0c08
-      - rtb-0daba26efba275ce1
-      - rtb-0ff8b5f4c7b2de34a
-    preferredSubnetId: subnet-0e6675a45026d5400
+      - rtb-049b9b34cea8cfedc
+      - rtb-0a0ae063bd643c77b
+      - rtb-02dace0fbffec5fd5
+      - rtb-077810d110759d4ab
+    preferredSubnetId: subnet-0f3cf1fa33788c126
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -505,26 +505,26 @@ vpcPeering:
   enabled: true
   prod:
     region: us-west-1
-    vpcId: vpc-047cdef79ad83d14b
+    vpcId: vpc-0d1fa42adb716fbbd
     vpcCidr: 10.0.0.0/16
     clusterName: primary
     routeTableIds:
-      - rtb-064288d0de4ffe75c
-      - rtb-0d48d5435213f32d1
-      - rtb-0b3969143f264a721
-      - rtb-0a9cf09032d832d66
+      - rtb-0cea2806a2815bc1f
+      - rtb-06a3f61f806824a92
+      - rtb-0285249c29acc85df
+      - rtb-01b75e8cdeaca670e
   dr:
     region: us-west-2
-    vpcId: vpc-0ea2e5c8cc8fa21bd
+    vpcId: vpc-057f2ed1c7ca70c98
     vpcCidr: 10.100.0.0/16
     clusterName: secondary
     routeTableIds:
-      - rtb-0230e1e9759c9f840
-      - rtb-032f3b7ec7baa4e96
-      - rtb-0e02d6d9eccdb0c08
-      - rtb-0daba26efba275ce1
-      - rtb-0ff8b5f4c7b2de34a
-      - rtb-0c165ee073bbaf879
+      - rtb-06b8356282322cb42
+      - rtb-049b9b34cea8cfedc
+      - rtb-0a0ae063bd643c77b
+      - rtb-02dace0fbffec5fd5
+      - rtb-077810d110759d4ab
+      - rtb-0815ca139a5fb663e
 route53Failover:
   enabled: true
   perAppHealthChecks: false
