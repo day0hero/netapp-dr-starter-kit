@@ -35,6 +35,9 @@ metadata:
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
+  # DNS options use VPCPeeringConnectionOptions (per-region). Updates on this MR can
+  # otherwise hit EC2 cross-region requester-option errors while peering is already active.
+  managementPolicies: ["Observe", "Create", "Delete"]
   forProvider:
     region: {{ $dr.region }}
     vpcPeeringConnectionIdRef:
