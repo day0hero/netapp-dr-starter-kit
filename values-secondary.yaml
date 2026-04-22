@@ -279,6 +279,11 @@ clusterGroup:
       namespace: trident-protect
       argoProject: trident
       path: charts/all/trident-protect-config
+      syncPolicy:
+        automated:
+          selfHeal: true
+        retry:
+          limit: 20
       overrides:
         - name: tridentProtect.ontapPeering.role
           value: acceptor
