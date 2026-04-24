@@ -384,10 +384,10 @@ route53Failover:
 endpointWatcher:
   enabled: true
   local:
-    fileSystemName: secondary-us-west-2-fsx
+    fileSystemName: netapp-dr-us-west-2-fsx
     region: us-west-2
     svmName: SVM2
   peer:
-    fileSystemName: primary-us-west-1-fsx
+    fileSystemName: netapp-primary-us-west-1-fsx
     region: us-west-1
     svmName: SVM1

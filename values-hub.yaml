@@ -457,15 +457,15 @@ clusterGroup:
 fsxOntap:
   enabled: true
   region: us-west-1
-  fileSystemName: primary-us-west-1-fsx
-  vpcId: vpc-0d1fa42adb716fbbd
+  fileSystemName: netapp-primary-us-west-1-fsx
+  vpcId: vpc-04b5ddc847534ff57
   subnetIds:
-    - subnet-0f68e14b7daf48b0c
-    - subnet-0558344b4e46f8923
+    - subnet-034ceebae0419602f
+    - subnet-0e196dbf938e273df
   routeTableIds:
-    - rtb-06a3f61f806824a92
-    - rtb-0285249c29acc85df
-  preferredSubnetId: subnet-0f68e14b7daf48b0c
+    - rtb-0cdaf9609a681f2ab
+    - rtb-08459707f3aba4b3e
+  preferredSubnetId: subnet-034ceebae0419602f
   allowedCidrs:
     - 10.0.0.0/16
     - 10.100.0.0/16
@@ -477,17 +477,17 @@ fsxOntap:
   peer:
     enabled: true
     region: us-west-2
-    fileSystemName: secondary-us-west-2-fsx
-    vpcId: vpc-0f49279ce520d7f52
+    fileSystemName: netapp-dr-us-west-2-fsx
+    vpcId: vpc-0dc687af4842c8a82
     subnetIds:
-      - subnet-0252e2c562d33cbb1
-      - subnet-0f4f1a9349bcc26cb
+      - subnet-0b6df0e7fcf09841f
+      - subnet-069a220efc6d2131c
     routeTableIds:
-      - rtb-0b124c75e802e9c25
-      - rtb-0b9f6c62dc2d4ab76
-      - rtb-030748a76b1a88b86
-      - rtb-06219237853eefaeb
-    preferredSubnetId: subnet-0252e2c562d33cbb1
+      - rtb-01a7266d44022adc5
+      - rtb-0256c59d3104eb3e1
+      - rtb-0beaec200000fbf96
+      - rtb-098467f2f2ecc7fa0
+    preferredSubnetId: subnet-0b6df0e7fcf09841f
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -499,37 +499,37 @@ s3AppVault:
 endpointWatcher:
   enabled: true
   local:
-    fileSystemName: primary-us-west-1-fsx
+    fileSystemName: netapp-primary-us-west-1-fsx
     region: us-west-1
     svmName: SVM1
   peer:
-    fileSystemName: secondary-us-west-2-fsx
+    fileSystemName: netapp-dr-us-west-2-fsx
     region: us-west-2
     svmName: SVM2
 vpcPeering:
   enabled: true
   prod:
     region: us-west-1
-    vpcId: vpc-0d1fa42adb716fbbd
+    vpcId: vpc-04b5ddc847534ff57
     vpcCidr: 10.0.0.0/16
-    clusterName: primary
+    clusterName: netapp-primary
     routeTableIds:
-      - rtb-0cea2806a2815bc1f
-      - rtb-06a3f61f806824a92
-      - rtb-0285249c29acc85df
-      - rtb-01b75e8cdeaca670e
+      - rtb-0efcde7e1d378f3d9
+      - rtb-0a4f7649ab1cf5b07
+      - rtb-0cdaf9609a681f2ab
+      - rtb-08459707f3aba4b3e
   dr:
     region: us-west-2
-    vpcId: vpc-0f49279ce520d7f52
+    vpcId: vpc-0dc687af4842c8a82
     vpcCidr: 10.100.0.0/16
-    clusterName: secondary
+    clusterName: netapp-dr
     routeTableIds:
-      - rtb-01c955c5e18493d23
-      - rtb-03a12b58e573c6b60
-      - rtb-0b124c75e802e9c25
-      - rtb-0b9f6c62dc2d4ab76
-      - rtb-030748a76b1a88b86
-      - rtb-06219237853eefaeb
+      - rtb-01a7266d44022adc5
+      - rtb-08af9523ab715b25c
+      - rtb-033b1aacd2a6740af
+      - rtb-0256c59d3104eb3e1
+      - rtb-0beaec200000fbf96
+      - rtb-098467f2f2ecc7fa0
 route53Failover:
   enabled: true
   perAppHealthChecks: false
@@ -538,12 +538,12 @@ route53Failover:
   # If true: Crossplane creates the zone; delegate NS at the parent registrar.
   createHostedZone: False
   hostedZoneId: "Z001281810MV5UN93UQKQ"
-  primaryIngressHostname: router-default.apps.primary.aws.validatedpatterns.io
-  secondaryIngressHostname: router-default.apps.secondary.aws.validatedpatterns.io
+  primaryIngressHostname: router-default.apps.netapp-primary.aws.validatedpatterns.io
+  secondaryIngressHostname: router-default.apps.netapp-dr.aws.validatedpatterns.io
   healthCheckPath: /
   # Per-app primaryHealthCheckFqdn / secondaryHealthCheckFqdn are optional; these apply to all apps when omitted.
-  primaryHealthCheckFqdn: router-default.apps.primary.aws.validatedpatterns.io
-  secondaryHealthCheckFqdn: router-default.apps.secondary.aws.validatedpatterns.io
+  primaryHealthCheckFqdn: router-default.apps.netapp-primary.aws.validatedpatterns.io
+  secondaryHealthCheckFqdn: router-default.apps.netapp-dr.aws.validatedpatterns.io
   apps:
     - name: boutique
     - name: wordpress
