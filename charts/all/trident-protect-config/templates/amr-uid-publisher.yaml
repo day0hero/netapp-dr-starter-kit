@@ -1,5 +1,6 @@
-{{- if .Values.tridentProtect.applications }}
-{{- if gt (len .Values.tridentProtect.applications) 0 }}
+{{- /* Hub only: secondary clusters define AppMirrorRelationships and must not overwrite S3. */ -}}
+{{- $amrs := .Values.tridentProtect.appMirrorRelationships | default list }}
+{{- if and .Values.tridentProtect.applications (gt (len .Values.tridentProtect.applications) 0) (eq (len $amrs) 0) }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -131,5 +132,4 @@ spec:
             items:
               - key: publish.py
                 path: publish.py
-{{- end }}
 {{- end }}
