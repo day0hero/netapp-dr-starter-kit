@@ -288,10 +288,12 @@ clusterGroup:
         - name: tridentProtect.ontapPeering.role
           value: acceptor
       ignoreDifferences:
+        # With selfHeal, ignoring desiredState keeps Promoted after Failover so the Resync action stays enabled in Argo UI.
         - group: protect.trident.netapp.io
           kind: AppMirrorRelationship
           jqPathExpressions:
             - .spec.sourceApplicationUID
+            - .spec.desiredState
     dr-monitoring:
       name: dr-monitoring
       namespace: openshift-monitoring
