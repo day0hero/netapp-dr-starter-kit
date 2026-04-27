@@ -32,9 +32,9 @@ locals {
 # -----------------------------------------------------------------------------
 # Health Checks — one per cluster
 #
-# HTTPS check against the cluster's ingress router. The router responds with
-# a 2xx/3xx on the wildcard domain, confirming the cluster is reachable.
-# Route53 health checkers run from multiple AWS regions globally.
+# HTTPS check against the primary cluster's ingress router (2xx/3xx required).
+# Secondary check is optional: when disabled, Route53 uses the secondary record
+# whenever the primary check fails (AWS active-passive failover semantics).
 # -----------------------------------------------------------------------------
 resource "aws_route53_health_check" "primary" {
   fqdn              = var.primary_health_check_fqdn
@@ -50,6 +50,8 @@ resource "aws_route53_health_check" "primary" {
 }
 
 resource "aws_route53_health_check" "secondary" {
+  count = var.attach_secondary_health_check ? 1 : 0
+
   fqdn              = var.secondary_health_check_fqdn
   port              = 443
   type              = "HTTPS"
@@ -99,5 +101,5 @@ resource "aws_route53_record" "app_secondary" {
 
   set_identifier  = "${each.value.name}-secondary"
   records         = [var.secondary_ingress_hostname]
-  health_check_id = aws_route53_health_check.secondary.id
+  health_check_id = var.attach_secondary_health_check ? aws_route53_health_check.secondary[0].id : null
 }

@@ -83,6 +83,10 @@ dr_failover_apps:
   - name: wordpress
 
 dr_failover_health_check_path: "/"
+# Route53: when false (default), secondary failover records have no health check so
+# primary-down still resolves to DR even if HTTPS healthCheckPath is non-2xx on DR.
+# Set true to require a healthy secondary probe before serving DR.
+dr_failover_attach_secondary_health_check: false
 
 # When true and dr_failover_hosted_zone_id is empty, crossplane-setup runs
 # aws route53 list-hosted-zones-by-name (see comments above).

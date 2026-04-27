@@ -457,6 +457,7 @@
         route53_failover_secondary_health_fqdn: "{{ _dr_router_hostname }}"
         route53_failover_apps: "{{ dr_failover_apps | default([]) }}"
         route53_failover_health_check_path: "{{ dr_failover_health_check_path | default('/') }}"
+        route53_failover_attach_secondary_health_check: "{{ dr_failover_attach_secondary_health_check | default(false) | bool }}"
         route53_failover_tags: "{{ resource_tags }}"
 
     - name: Enable drFailover in values-global.yaml
@@ -1310,6 +1311,7 @@
         route53_failover_primary_health_fqdn: "router-default.{{ _prod_ingress_domain_destroy.stdout | default('placeholder.example.com') }}"
         route53_failover_secondary_health_fqdn: "router-default.{{ _dr_ingress_domain_destroy.stdout | default('placeholder.example.com') }}"
         route53_failover_apps: "{{ dr_failover_apps | default([]) }}"
+        route53_failover_attach_secondary_health_check: "{{ dr_failover_attach_secondary_health_check | default(false) | bool }}"
         route53_failover_tags: "{{ resource_tags }}"
         route53_failover_destroy: true
 

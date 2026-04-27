@@ -33,6 +33,7 @@ route53_failover_apps: []
 
 # Health check
 route53_failover_health_check_path: "/"
+route53_failover_attach_secondary_health_check: false
 route53_failover_record_ttl: 60
 
 # Tags

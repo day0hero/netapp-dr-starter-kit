@@ -100,6 +100,8 @@ dr_failover_apps:
 
 # Health check path hit by Route53 against each cluster's ingress router
 dr_failover_health_check_path: "/"
+# Route53 (Terraform dr-setup): omit secondary health check by default (same semantics as Crossplane).
+dr_failover_attach_secondary_health_check: false
 
 # -----------------------------------------------------------------------------
 # Tags

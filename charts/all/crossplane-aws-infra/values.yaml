@@ -143,6 +143,10 @@ route53Failover:
   primaryHealthCheckFqdn: ""
   secondaryHealthCheckFqdn: ""
   healthCheckPath: "/"
+  # When false (default), Route53 SECONDARY records have no health check. Primary-down
+  # DNS failover still targets DR ingress even if HTTPS to / on the DR router is non-2xx.
+  # Set true to require a passing secondary health check before serving DR.
+  attachSecondaryHealthCheck: false
   recordTtl: 60
   apps: []
   #  - name: boutique

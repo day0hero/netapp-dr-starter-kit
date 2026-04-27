@@ -6,6 +6,10 @@
 {{- $hcPath := $r53.healthCheckPath | default "/" }}
 {{- $primaryHcFqdn := $r53.primaryHealthCheckFqdn }}
 {{- $secondaryHcFqdn := $r53.secondaryHealthCheckFqdn }}
+{{- /* When false (default), SECONDARY records have no health check. If primary is unhealthy,
+     Route 53 uses the secondary record even when the DR endpoint would fail an HTTPS probe
+     (e.g. router returns 503 for /). See AWS "How Route 53 chooses records..." failover docs. */}}
+{{- $attachSecondaryHc := $r53.attachSecondaryHealthCheck | default false }}
 
 {{/* Hosted Zone */}}
 {{- if $r53.createHostedZone }}
@@ -56,6 +60,7 @@ spec:
       {{- end }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
+{{- if $attachSecondaryHc }}
 ---
 apiVersion: route53.aws.upbound.io/v1beta1
 kind: HealthCheck
@@ -80,6 +85,7 @@ spec:
       {{- end }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
+{{- end }}
 {{- range $app := $r53.apps }}
 ---
 apiVersion: route53.aws.upbound.io/v1beta2
@@ -141,8 +147,10 @@ spec:
       type: SECONDARY
     records:
       - {{ $r53.secondaryIngressHostname | quote }}
+{{- if $attachSecondaryHc }}
     healthCheckIdRef:
       name: r53-failover-secondary-hc
+{{- end }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}
@@ -177,6 +185,7 @@ spec:
       {{- end }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
+{{- if $attachSecondaryHc }}
 ---
 apiVersion: route53.aws.upbound.io/v1beta1
 kind: HealthCheck
@@ -201,6 +210,7 @@ spec:
       {{- end }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
+{{- end }}
 ---
 apiVersion: route53.aws.upbound.io/v1beta2
 kind: Record
@@ -261,8 +271,10 @@ spec:
       type: SECONDARY
     records:
       - {{ $r53.secondaryIngressHostname | quote }}
+{{- if $attachSecondaryHc }}
     healthCheckIdRef:
       name: {{ $app.name }}-secondary-hc
+{{- end }}
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}

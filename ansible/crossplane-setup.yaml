@@ -364,6 +364,7 @@
         yq -i '.route53Failover.primaryHealthCheckFqdn = "{{ _prod_router_hostname }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.secondaryHealthCheckFqdn = "{{ _dr_router_hostname }}"' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.healthCheckPath = "{{ dr_failover_health_check_path | default("/") }}"' {{ _project_root }}/values-hub.yaml
+        yq -i '.route53Failover.attachSecondaryHealthCheck = {{ dr_failover_attach_secondary_health_check | default(false) | bool | lower }}' {{ _project_root }}/values-hub.yaml
         yq -i '.route53Failover.apps = {{ dr_failover_apps | default([]) | to_json }}' {{ _project_root }}/values-hub.yaml
       changed_when: true
 

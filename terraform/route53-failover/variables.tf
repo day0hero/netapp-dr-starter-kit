@@ -58,6 +58,12 @@ variable "health_check_path" {
   default     = "/"
 }
 
+variable "attach_secondary_health_check" {
+  description = "When false (default), secondary failover records have no health check so primary-down DNS still targets DR even if HTTPS to health_check_path is non-2xx on DR."
+  type        = bool
+  default     = false
+}
+
 variable "record_ttl" {
   description = "TTL for DNS failover records (seconds)"
   type        = number

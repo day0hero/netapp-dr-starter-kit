@@ -334,6 +334,7 @@ clusterGroup:
           kind: AppMirrorRelationship
           jqPathExpressions:
             - .spec.sourceApplicationUID
+            - .spec.desiredState
     wordpress:
       name: wordpress
       namespace: wordpress
@@ -533,6 +534,9 @@ vpcPeering:
 route53Failover:
   enabled: true
   perAppHealthChecks: false
+  # Omit secondary health check so DNS follows primary-down (AMR Failover) without
+  # requiring a 2xx/3xx from the DR router on healthCheckPath. Set true to gate DR on probe success.
+  attachSecondaryHealthCheck: false
   domain: dr.aws.validatedpatterns.io
   # If false: set hostedZoneId to the Route53 zone ID for `domain` (see ansible dr_failover_hosted_zone_id or AWS console).
   # If true: Crossplane creates the zone; delegate NS at the parent registrar.

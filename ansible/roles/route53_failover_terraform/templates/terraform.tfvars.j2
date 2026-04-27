@@ -13,6 +13,7 @@ primary_health_check_fqdn   = "{{ route53_failover_primary_health_fqdn }}"
 secondary_health_check_fqdn = "{{ route53_failover_secondary_health_fqdn }}"
 
 health_check_path = "{{ route53_failover_health_check_path }}"
+attach_secondary_health_check = {{ 'true' if (route53_failover_attach_secondary_health_check | default(false) | bool) else 'false' }}
 record_ttl        = {{ route53_failover_record_ttl }}
 
 apps = [
