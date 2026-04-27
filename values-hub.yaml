@@ -458,14 +458,14 @@ fsxOntap:
   enabled: true
   region: us-west-1
   fileSystemName: netapp-primary-us-west-1-fsx
-  vpcId: vpc-04b5ddc847534ff57
+  vpcId: vpc-052cf00beef519ac7
   subnetIds:
-    - subnet-034ceebae0419602f
-    - subnet-0e196dbf938e273df
+    - subnet-04d1ec1375426ee76
+    - subnet-0d22efbe96f9911a5
   routeTableIds:
-    - rtb-0cdaf9609a681f2ab
-    - rtb-08459707f3aba4b3e
-  preferredSubnetId: subnet-034ceebae0419602f
+    - rtb-0bc0ccc7c1f291ea3
+    - rtb-0358f05a1f3033151
+  preferredSubnetId: subnet-04d1ec1375426ee76
   allowedCidrs:
     - 10.0.0.0/16
     - 10.100.0.0/16
@@ -478,16 +478,16 @@ fsxOntap:
     enabled: true
     region: us-west-2
     fileSystemName: netapp-dr-us-west-2-fsx
-    vpcId: vpc-05207f1c0b603051e
+    vpcId: vpc-0bb259c51c3e2e1c6
     subnetIds:
-      - subnet-058de6b6b03b3034b
-      - subnet-0aaa91f523984d02b
+      - subnet-05bdd614222220421
+      - subnet-068f496f0a55e58c0
     routeTableIds:
-      - rtb-0dc9a14c445eebc27
-      - rtb-0429e18d3afc83161
-      - rtb-062bce023ae311032
-      - rtb-0f2d20cf77fd4b63a
-    preferredSubnetId: subnet-058de6b6b03b3034b
+      - rtb-0446067eef8c40244
+      - rtb-0427766e968f44dcb
+      - rtb-013623fb327ae8c17
+      - rtb-0261884648247ebc3
+    preferredSubnetId: subnet-05bdd614222220421
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -510,26 +510,26 @@ vpcPeering:
   enabled: true
   prod:
     region: us-west-1
-    vpcId: vpc-04b5ddc847534ff57
+    vpcId: vpc-052cf00beef519ac7
     vpcCidr: 10.0.0.0/16
     clusterName: netapp-primary
     routeTableIds:
-      - rtb-0efcde7e1d378f3d9
-      - rtb-0a4f7649ab1cf5b07
-      - rtb-0cdaf9609a681f2ab
-      - rtb-08459707f3aba4b3e
+      - rtb-0bc0ccc7c1f291ea3
+      - rtb-0242a7b573a4f855e
+      - rtb-0358f05a1f3033151
+      - rtb-0db17e68299b212f8
   dr:
     region: us-west-2
-    vpcId: vpc-05207f1c0b603051e
+    vpcId: vpc-0bb259c51c3e2e1c6
     vpcCidr: 10.100.0.0/16
     clusterName: netapp-dr
     routeTableIds:
-      - rtb-0c6bd25c1fd5840da
-      - rtb-0dc9a14c445eebc27
-      - rtb-0429e18d3afc83161
-      - rtb-062bce023ae311032
-      - rtb-07e8d52b170e8f38b
-      - rtb-0f2d20cf77fd4b63a
+      - rtb-0446067eef8c40244
+      - rtb-0b4e8e03bb8767b2e
+      - rtb-0427766e968f44dcb
+      - rtb-07b844e33a5ed77f1
+      - rtb-013623fb327ae8c17
+      - rtb-0261884648247ebc3
 route53Failover:
   enabled: true
   perAppHealthChecks: false
