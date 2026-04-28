@@ -459,14 +459,14 @@ fsxOntap:
   enabled: true
   region: us-west-1
   fileSystemName: netapp-primary-us-west-1-fsx
-  vpcId: vpc-052cf00beef519ac7
+  vpcId: vpc-022a62f9e90c8a412
   subnetIds:
-    - subnet-04d1ec1375426ee76
-    - subnet-0d22efbe96f9911a5
+    - subnet-0dd9857baa1e28f20
+    - subnet-0aba29a3d359a7197
   routeTableIds:
-    - rtb-0bc0ccc7c1f291ea3
-    - rtb-0358f05a1f3033151
-  preferredSubnetId: subnet-04d1ec1375426ee76
+    - rtb-064b097f4c1b7a3fa
+    - rtb-0864500a66cc7da76
+  preferredSubnetId: subnet-0dd9857baa1e28f20
   allowedCidrs:
     - 10.0.0.0/16
     - 10.100.0.0/16
@@ -479,16 +479,16 @@ fsxOntap:
     enabled: true
     region: us-west-2
     fileSystemName: netapp-dr-us-west-2-fsx
-    vpcId: vpc-0bb259c51c3e2e1c6
+    vpcId: vpc-0aa3acf29d14ed9a1
     subnetIds:
-      - subnet-05bdd614222220421
-      - subnet-068f496f0a55e58c0
+      - subnet-08eff9ce79638e97d
+      - subnet-006b3cb598bb38db5
     routeTableIds:
-      - rtb-0446067eef8c40244
-      - rtb-0427766e968f44dcb
-      - rtb-013623fb327ae8c17
-      - rtb-0261884648247ebc3
-    preferredSubnetId: subnet-05bdd614222220421
+      - rtb-0ba117114f1b535f3
+      - rtb-02a8325e0d8adbaea
+      - rtb-02c94387134db5384
+      - rtb-0d23ff0c7c8157b7e
+    preferredSubnetId: subnet-08eff9ce79638e97d
     allowedCidrs:
       - 10.100.0.0/16
       - 10.0.0.0/16
@@ -511,26 +511,26 @@ vpcPeering:
   enabled: true
   prod:
     region: us-west-1
-    vpcId: vpc-052cf00beef519ac7
+    vpcId: vpc-022a62f9e90c8a412
     vpcCidr: 10.0.0.0/16
     clusterName: netapp-primary
     routeTableIds:
-      - rtb-0bc0ccc7c1f291ea3
-      - rtb-0242a7b573a4f855e
-      - rtb-0358f05a1f3033151
-      - rtb-0db17e68299b212f8
+      - rtb-079dfb3b8ac608c6b
+      - rtb-064b097f4c1b7a3fa
+      - rtb-024f428e0feefeb41
+      - rtb-0864500a66cc7da76
   dr:
     region: us-west-2
-    vpcId: vpc-0bb259c51c3e2e1c6
+    vpcId: vpc-0aa3acf29d14ed9a1
     vpcCidr: 10.100.0.0/16
     clusterName: netapp-dr
     routeTableIds:
-      - rtb-0446067eef8c40244
-      - rtb-0b4e8e03bb8767b2e
-      - rtb-0427766e968f44dcb
-      - rtb-07b844e33a5ed77f1
-      - rtb-013623fb327ae8c17
-      - rtb-0261884648247ebc3
+      - rtb-06072b650d6dfeb81
+      - rtb-0f821abd0aef13a2a
+      - rtb-0ba117114f1b535f3
+      - rtb-02a8325e0d8adbaea
+      - rtb-02c94387134db5384
+      - rtb-0d23ff0c7c8157b7e
 route53Failover:
   enabled: true
   perAppHealthChecks: false
