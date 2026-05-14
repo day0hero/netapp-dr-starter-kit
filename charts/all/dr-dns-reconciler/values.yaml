@@ -2,6 +2,10 @@ global:
   clusterDomain: ""
   drClusterDomain: ""
 
+networkDiscovery:
+  configMapNamespace: crossplane-system
+  configMapName: crossplane-network-discovery
+
 drDnsReconciler:
   enabled: false
   # Argo PostSync Job: apply Route53 once right after sync (avoids NXDOMAIN until first CronJob tick).

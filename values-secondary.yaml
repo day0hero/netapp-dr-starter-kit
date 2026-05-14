@@ -38,8 +38,7 @@ drDnsStateExport:
 boutique:
   frontend:
     enableSingleSharedSession: '"false"'
-# FSx endpoint IPs are dynamically discovered by fsx-endpoint-watcher CronJob.
-# Only SVM names are needed here (deterministic, set by crossplane-setup).
+# FSx endpoint IPs are discovered at runtime by fsx-endpoint-watcher.
 tridentFSX:
   mgmtLIF: ""
   clusterLIF: ""
@@ -354,7 +353,16 @@ clusterGroup:
   sharedValueFiles:
     - '/overrides/values-{{ $.Values.global.clusterPlatform }}.yaml'
 
-# FSX ONTAP and S3 AppVault are disabled by default on this cluster.
+crossplaneBootstrap:
+  enabled: true
+  schedule: "*/5 * * * *"
+  externalSecrets:
+    drClusterKubeconfig: false
+    primaryClusterKubeconfig: true
+  remoteKubeconfig:
+    secretName: ocp-primary-cluster-kubeconfig
+    secretKey: kubeconfig
+    optional: true
 fsxOntap:
   enabled: false
 s3AppVault:
@@ -365,11 +373,3 @@ route53Failover:
   enabled: false
 endpointWatcher:
   enabled: true
-  local:
-    fileSystemName: "" # Provided by crossplane-setup
-    region: "" # Provided by crossplane-setup
-    svmName: "" # Provided by crossplane-setup
-  peer:
-    fileSystemName: "" # Provided by crossplane-setup
-    region: "" # Provided by crossplane-setup
-    svmName: "" # Provided by crossplane-setup

@@ -171,3 +171,23 @@ route53Failover:
   tags:
     ManagedBy: Crossplane
     Purpose: DR-Failover
+
+# ---------------------------------------------------------------------------
+# In-cluster network discovery (writes ConfigMap discovery.json for Helm merge)
+# ---------------------------------------------------------------------------
+crossplaneBootstrap:
+  enabled: true
+  schedule: "*/5 * * * *"
+  discoveryNamespace: ""
+  discoveryConfigMapName: crossplane-network-discovery
+  remoteKubeconfig:
+    secretName: ocp-dr-cluster-kubeconfig
+    secretKey: kubeconfig
+    optional: true
+  route53:
+    discoverHostedZone: true
+    discoverHostedZoneParent: true
+    zoneLookupName: ""
+  externalSecrets:
+    drClusterKubeconfig: false
+    primaryClusterKubeconfig: false

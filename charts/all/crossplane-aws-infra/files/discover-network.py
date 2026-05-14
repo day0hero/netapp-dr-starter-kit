@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""
+Discover OpenShift + AWS networking for Crossplane (hub and secondary).
+Writes a ConfigMap data key discovery.json consumed by Helm lookup merge.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from typing import Any, Dict, List, Optional
+
+
+def run_oc(kubeconfig: Optional[str], args: List[str]) -> str:
+    env = os.environ.copy()
+    if kubeconfig:
+        env["KUBECONFIG"] = kubeconfig
+    r = subprocess.run(["oc", *args], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        print(r.stderr, file=sys.stderr)
+        raise RuntimeError(f"oc failed: {' '.join(args)}")
+    return r.stdout.strip()
+
+
+def run_aws_json(args: List[str]) -> Any:
+    r = subprocess.run(["aws", *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(r.stderr, file=sys.stderr)
+        raise RuntimeError(f"aws failed: {' '.join(args)}")
+    return json.loads(r.stdout or "null")
+
+
+def oc_json(kubeconfig: Optional[str], *args: str) -> Any:
+    raw = run_oc(kubeconfig, ["get", *args, "-o", "json"])
+    return json.loads(raw)
+
+
+def discover_install_cidr(kubeconfig: Optional[str]) -> str:
+    try:
+        raw = run_oc(
+            kubeconfig,
+            [
+                "get",
+                "configmap",
+                "cluster-config-v1",
+                "-n",
+                "kube-system",
+                "-o",
+                'jsonpath={.data.install-config}',
+            ],
+        )
+        if not raw:
+            return ""
+        # install-config is YAML; extract machineNetwork[0].cidr without PyYAML
+        m = re.search(r"machineNetwork:\s*\n\s*-\s*cidr:\s*(\S+)", raw)
+        if m:
+            return m.group(1).strip()
+    except RuntimeError:
+        pass
+    return ""
+
+
+def discover_cluster(kubeconfig: Optional[str], label: str) -> Dict[str, Any]:
+    infra = oc_json(kubeconfig, "infrastructure", "cluster")
+    st = infra.get("status") or {}
+    plat = st.get("platformStatus") or {}
+    aws = plat.get("aws") or {}
+    region = (aws.get("region") or "").strip()
+    infra_name = (st.get("infrastructureName") or "").strip()
+    topology = (st.get("controlPlaneTopology") or "").strip()
+    is_hcp = topology == "External"
+    cluster_name = (infra.get("metadata") or {}).get("name") or infra_name
+    if not region or not infra_name:
+        raise RuntimeError(f"{label}: missing region or infrastructureName from Infrastructure")
+
+    vpc_name = f"{infra_name}-vpc"
+    cidr_override = discover_install_cidr(kubeconfig)
+
+    vpcs = run_aws_json(
+        [
+            "ec2",
+            "describe-vpcs",
+            "--region",
+            region,
+            "--filters",
+            f"Name=tag:Name,Values={vpc_name}",
+            "--output",
+            "json",
+        ]
+    )
+    vpc_list = (vpcs or {}).get("Vpcs") or []
+    if not vpc_list and is_hcp:
+        tag_key = f"tag:sigs.k8s.io/cluster-api-provider-aws/cluster/{infra_name}"
+        vpcs = run_aws_json(
+            [
+                "ec2",
+                "describe-vpcs",
+                "--region",
+                region,
+                "--filters",
+                f"Name={tag_key},Values=owned",
+                "--output",
+                "json",
+            ]
+        )
+        vpc_list = (vpcs or {}).get("Vpcs") or []
+    if not vpc_list:
+        raise RuntimeError(f"{label}: VPC not found (Name={vpc_name}, HCP={is_hcp})")
+
+    vpc_id = vpc_list[0]["VpcId"]
+    vpc_cidr = vpc_list[0].get("CidrBlock") or cidr_override
+    if not vpc_cidr:
+        raise RuntimeError(f"{label}: could not resolve VPC CIDR")
+
+    if is_hcp:
+        subnet_filters = [
+            "Name=vpc-id,Values=" + vpc_id,
+            "Name=tag:kubernetes.io/role/internal-elb,Values=1",
+        ]
+    else:
+        subnet_filters = [
+            "Name=vpc-id,Values=" + vpc_id,
+            "Name=tag:sigs.k8s.io/cluster-api-provider-aws/role,Values=private",
+            f"Name=tag:kubernetes.io/cluster/{infra_name},Values=owned",
+            f"Name=tag:sigs.k8s.io/cluster-api-provider-aws/cluster/{infra_name},Values=owned",
+        ]
+    sn_args = ["ec2", "describe-subnets", "--region", region, "--output", "json"]
+    for i in range(0, len(subnet_filters), 2):
+        sn_args.extend(["--filters", subnet_filters[i], subnet_filters[i + 1]])
+    sn = run_aws_json(sn_args)
+    subnets = sorted((sn or {}).get("Subnets") or [], key=lambda s: s.get("SubnetId", ""))
+    subnet_ids = [s["SubnetId"] for s in subnets if s.get("SubnetId")]
+    if len(subnet_ids) < 2:
+        raise RuntimeError(f"{label}: need >= 2 private subnets, found {len(subnet_ids)}")
+
+    rt_ids: List[str] = []
+    for sid in subnet_ids:
+        rts = run_aws_json(
+            [
+                "ec2",
+                "describe-route-tables",
+                "--region",
+                region,
+                "--filters",
+                "Name=association.subnet-id,Values=" + sid,
+                f"Name=vpc-id,Values={vpc_id}",
+                "--output",
+                "json",
+            ]
+        )
+        for rt in (rts or {}).get("RouteTables") or []:
+            if rt.get("RouteTableId"):
+                rt_ids.append(rt["RouteTableId"])
+    route_table_ids = sorted(set(rt_ids))
+
+    all_rt = run_aws_json(
+        [
+            "ec2",
+            "describe-route-tables",
+            "--region",
+            region,
+            "--filters",
+            f"Name=vpc-id,Values={vpc_id}",
+            "--output",
+            "json",
+        ]
+    )
+    all_route_table_ids = sorted({rt["RouteTableId"] for rt in (all_rt or {}).get("RouteTables") or [] if rt.get("RouteTableId")})
+
+    ingress_domain = run_oc(
+        kubeconfig,
+        ["get", "ingress.config", "cluster", "-o", "jsonpath={.spec.domain}"],
+    )
+    base_domain = run_oc(
+        kubeconfig,
+        ["get", "dns.config", "cluster", "-o", "jsonpath={.spec.baseDomain}"],
+    )
+
+    return {
+        "cluster_name": cluster_name.strip(),
+        "region": region,
+        "vpc_id": vpc_id,
+        "vpc_cidr": vpc_cidr,
+        "infra_name": infra_name,
+        "is_hcp": is_hcp,
+        "subnet_ids": subnet_ids,
+        "route_table_ids": route_table_ids,
+        "all_route_table_ids": all_route_table_ids,
+        "ingress_domain": ingress_domain,
+        "base_domain": base_domain,
+    }
+
+
+def fsx_name(cluster_name: str, region: str) -> str:
+    return f"{cluster_name}-{region}-fsx"
+
+
+def route53_lookup_zone_id(domain: str, region: str) -> str:
+    if not domain:
+        return ""
+    out = subprocess.run(
+        [
+            "aws",
+            "route53",
+            "list-hosted-zones-by-name",
+            "--dns-name",
+            domain,
+            "--query",
+            f"HostedZones[?Name=='{domain}.'].Id",
+            "--output",
+            "text",
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "AWS_DEFAULT_REGION": region},
+    )
+    if out.returncode != 0:
+        print(out.stderr, file=sys.stderr)
+        return ""
+    line = (out.stdout or "").strip().split("\n", 1)[0].strip()
+    if not line:
+        return ""
+    return line.replace("/hostedzone/", "")
+
+
+def crossplane_zone_id(domain: str) -> str:
+    """If Crossplane already created a public zone, read its AWS zone id from status."""
+    safe = domain.replace(".", "-")
+    name = f"dr-{safe}"
+    try:
+        raw = run_oc(
+            None,
+            [
+                "get",
+                "zone.route53.aws.upbound.io",
+                name,
+                "-n",
+                os.environ.get("TARGET_NAMESPACE", "crossplane-system"),
+                "-o",
+                "json",
+            ],
+        )
+        z = json.loads(raw)
+        at = ((z.get("status") or {}).get("atProvider") or {})
+        zid = (at.get("id") or "").strip()
+        return zid.replace("/hostedzone/", "") if zid else ""
+    except (RuntimeError, json.JSONDecodeError, KeyError):
+        return ""
+
+
+def apply_configmap(namespace: str, name: str, data: Dict[str, str]) -> None:
+    obj = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": name, "namespace": namespace},
+        "data": data,
+    }
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(obj, f)
+        path = f.name
+    try:
+        subprocess.run(["oc", "apply", "-f", path, "--server-side", "--field-manager=discover-network"], check=True)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def main() -> int:
+    role = os.environ.get("PATTERN_CLUSTER_ROLE", "hub").strip()
+    remote_kc = os.environ.get("REMOTE_KUBECONFIG_PATH", "").strip()
+    ns = os.environ.get("DISCOVERY_CONFIGMAP_NAMESPACE", "crossplane-system").strip()
+    cm_name = os.environ.get("DISCOVERY_CONFIGMAP_NAME", "crossplane-network-discovery").strip()
+    appvault_bucket = os.environ.get("APPVAULT_BUCKET", "").strip()
+    appvault_region = os.environ.get("APPVAULT_REGION", "").strip()
+    dr_domain_git = os.environ.get("DR_FAILOVER_DOMAIN", "").strip()
+    discover_hosted_zone = os.environ.get("ROUTE53_DISCOVER_HOSTED_ZONE", "true").lower() == "true"
+    discover_parent = os.environ.get("ROUTE53_DISCOVER_HOSTED_ZONE_PARENT", "true").lower() == "true"
+    zone_lookup_override = os.environ.get("ROUTE53_ZONE_LOOKUP_NAME", "").strip()
+    explicit_zone = os.environ.get("ROUTE53_HOSTED_ZONE_ID_EXPLICIT", "").strip()
+    create_hosted_zone_git = os.environ.get("ROUTE53_CREATE_HOSTED_ZONE", "true").lower() == "true"
+
+    if role == "secondary":
+        if not remote_kc or not os.path.isfile(remote_kc):
+            print("REMOTE_KUBECONFIG_PATH must be set to the primary cluster kubeconfig file", file=sys.stderr)
+            return 1
+        local = discover_cluster(None, "local(secondary)")
+        remote = discover_cluster(remote_kc, "remote(primary)")
+        out: Dict[str, Any] = {
+            "endpointWatcher": {
+                "local": {
+                    "fileSystemName": fsx_name(local["cluster_name"], local["region"]),
+                    "region": local["region"],
+                    "svmName": "SVM2",
+                },
+                "peer": {
+                    "fileSystemName": fsx_name(remote["cluster_name"], remote["region"]),
+                    "region": remote["region"],
+                    "svmName": "SVM1",
+                },
+            },
+            "global": {
+                "localClusterDomain": remote["ingress_domain"],
+                "drClusterDomain": local["ingress_domain"],
+                "clusterDomain": remote["ingress_domain"],
+            },
+            "_discoveryComplete": True,
+        }
+        apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
+        print("secondary discovery written")
+        return 0
+
+    # hub
+    if not remote_kc or not os.path.isfile(remote_kc):
+        print("REMOTE_KUBECONFIG_PATH must be set to the DR cluster kubeconfig file", file=sys.stderr)
+        return 1
+    if not appvault_bucket:
+        print("APPVAULT_BUCKET must be set (tridentProtect.appVault.s3.bucketName in values-global)", file=sys.stderr)
+        return 1
+    prod = discover_cluster(None, "local(hub/prod)")
+    dr = discover_cluster(remote_kc, "remote(dr)")
+
+    if dr_domain_git:
+        failover_domain = dr_domain_git
+    else:
+        parts = prod["base_domain"].split(".", 1)
+        failover_domain = "dr." + parts[1] if len(parts) > 1 else f"dr.{prod['base_domain']}"
+
+    zone_id = explicit_zone
+    if not zone_id and discover_hosted_zone:
+        lookup_name = zone_lookup_override or failover_domain
+        zone_id = route53_lookup_zone_id(lookup_name, prod["region"])
+        if not zone_id and discover_parent and failover_domain.startswith("dr."):
+            parent = failover_domain[3:]
+            if parent:
+                zone_id = route53_lookup_zone_id(parent, prod["region"])
+
+    create_hosted_zone = create_hosted_zone_git and not bool(zone_id)
+    if not zone_id:
+        zone_id = crossplane_zone_id(failover_domain)
+
+    route53_out: Dict[str, Any] = {
+        "domain": failover_domain,
+        "createHostedZone": create_hosted_zone,
+        "region": prod["region"],
+    }
+    if zone_id:
+        route53_out["hostedZoneId"] = zone_id
+    drdns_out: Dict[str, Any] = {
+        "domain": failover_domain,
+        "s3Bucket": appvault_bucket,
+        "s3Region": appvault_region or prod["region"],
+    }
+    if zone_id:
+        drdns_out["hostedZoneId"] = zone_id
+
+    out = {
+        "global": {
+            "localClusterDomain": prod["ingress_domain"],
+            "drClusterDomain": dr["ingress_domain"],
+            "clusterDomain": prod["ingress_domain"],
+        },
+        "fsxOntap": {
+            "enabled": True,
+            "region": prod["region"],
+            "fileSystemName": fsx_name(prod["cluster_name"], prod["region"]),
+            "svmName": "SVM1",
+            "vpcId": prod["vpc_id"],
+            "subnetIds": prod["subnet_ids"][:2],
+            "routeTableIds": prod["route_table_ids"],
+            "preferredSubnetId": prod["subnet_ids"][0],
+            "allowedCidrs": [prod["vpc_cidr"], dr["vpc_cidr"]],
+            "peer": {
+                "enabled": True,
+                "region": dr["region"],
+                "fileSystemName": fsx_name(dr["cluster_name"], dr["region"]),
+                "vpcId": dr["vpc_id"],
+                "subnetIds": dr["subnet_ids"][:2],
+                "routeTableIds": dr["route_table_ids"],
+                "preferredSubnetId": dr["subnet_ids"][0],
+                "allowedCidrs": [dr["vpc_cidr"], prod["vpc_cidr"]],
+                "svmName": "SVM2",
+            },
+        },
+        "s3AppVault": {
+            "bucketName": appvault_bucket,
+            "region": appvault_region or prod["region"],
+        },
+        "endpointWatcher": {
+            "local": {
+                "fileSystemName": fsx_name(prod["cluster_name"], prod["region"]),
+                "region": prod["region"],
+                "svmName": "SVM1",
+            },
+            "peer": {
+                "fileSystemName": fsx_name(dr["cluster_name"], dr["region"]),
+                "region": dr["region"],
+                "svmName": "SVM2",
+            },
+        },
+        "vpcPeering": {
+            "enabled": True,
+            "prod": {
+                "region": prod["region"],
+                "vpcId": prod["vpc_id"],
+                "vpcCidr": prod["vpc_cidr"],
+                "clusterName": prod["cluster_name"],
+                "routeTableIds": prod["all_route_table_ids"],
+            },
+            "dr": {
+                "region": dr["region"],
+                "vpcId": dr["vpc_id"],
+                "vpcCidr": dr["vpc_cidr"],
+                "clusterName": dr["cluster_name"],
+                "routeTableIds": dr["all_route_table_ids"],
+            },
+        },
+        "route53Failover": route53_out,
+        "drDnsReconciler": drdns_out,
+        "_discoveryComplete": True,
+    }
+    apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
+    print("hub discovery written")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as e:  # noqa: BLE001
+        print(str(e), file=sys.stderr)
+        raise SystemExit(1)

@@ -3,6 +3,10 @@
 # NetApp DR Starter Kit - Crossplane Infrastructure Setup
 # =============================================================================
 #
+# Optional / break-glass: the pattern now discovers prod+DR networking in-cluster
+# (CronJob crossplane-network-discovery → ConfigMap discovery.json → Helm merge).
+# Use this playbook only if you need to regenerate Git values locally without cluster access.
+#
 # This playbook discovers cluster infrastructure and writes the discovered
 # values into the Helm values files so that Crossplane (via ArgoCD) creates
 # all AWS resources: FSx ONTAP, S3, VPC Peering, Route53 Failover.

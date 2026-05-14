@@ -35,54 +35,124 @@ Required to adopt failover CNAME sets that already exist in Route53 (avoids Inva
 {{- end }}
 
 {{/*
-Build the list of FSx instances to create (local + optional peer).
-Returns a list of dicts, each with the full config for one FSx instance.
+ConfigMap discovery.json (written by crossplane-network-discovery CronJob) merged over Git values.
 */}}
+{{- define "crossplane-aws-infra.discoveryDict" -}}
+{{- $cb := .Values.crossplaneBootstrap | default dict }}
+{{- $ns := $cb.discoveryNamespace | default .Release.Namespace }}
+{{- $name := $cb.discoveryConfigMapName | default "crossplane-network-discovery" }}
+{{- $cm := lookup "v1" "ConfigMap" $ns $name }}
+{{- if and $cm $cm.data (index $cm.data "discovery.json") }}
+{{- index $cm.data "discovery.json" | fromJson | toJson }}
+{{- else }}
+{{- dict | toJson }}
+{{- end }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.mergedGlobal" -}}
+{{- $disc := include "crossplane-aws-infra.discoveryDict" . | fromJson }}
+{{- mergeOverwrite (deepCopy (.Values.global | default dict)) ($disc.global | default dict) | toJson }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.mergedFsxOntap" -}}
+{{- $disc := include "crossplane-aws-infra.discoveryDict" . | fromJson }}
+{{- mergeOverwrite (deepCopy .Values.fsxOntap) ($disc.fsxOntap | default dict) | toJson }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.mergedEndpointWatcher" -}}
+{{- $disc := include "crossplane-aws-infra.discoveryDict" . | fromJson }}
+{{- mergeOverwrite (deepCopy .Values.endpointWatcher) ($disc.endpointWatcher | default dict) | toJson }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.mergedVpcPeering" -}}
+{{- $disc := include "crossplane-aws-infra.discoveryDict" . | fromJson }}
+{{- mergeOverwrite (deepCopy .Values.vpcPeering) ($disc.vpcPeering | default dict) | toJson }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.mergedRoute53Failover" -}}
+{{- $disc := include "crossplane-aws-infra.discoveryDict" . | fromJson }}
+{{- mergeOverwrite (deepCopy .Values.route53Failover) ($disc.route53Failover | default dict) | toJson }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.mergedS3AppVault" -}}
+{{- $disc := include "crossplane-aws-infra.discoveryDict" . | fromJson }}
+{{- $fromDisc := $disc.s3AppVault | default dict }}
+{{- $tp := .Values.tridentProtect | default dict }}
+{{- $av := ($tp.appVault).s3 | default dict }}
+{{- $m := mergeOverwrite (deepCopy .Values.s3AppVault) $fromDisc }}
+{{- if not ($m.bucketName | default "") }}
+{{- $_ := set $m "bucketName" $av.bucketName }}
+{{- end }}
+{{- if not ($m.region | default "") }}
+{{- $_ := set $m "region" $av.region }}
+{{- end }}
+{{- $m | toJson }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.vpcPeeringRenderable" -}}
+{{- $vp := include "crossplane-aws-infra.mergedVpcPeering" . | fromJson }}
+{{- if and ($vp.enabled | default false) (ne ($vp.prod.vpcId | default "") "") (ne ($vp.dr.vpcId | default "") "") }}true{{- end }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.route53Renderable" -}}
+{{- $r53 := include "crossplane-aws-infra.mergedRoute53Failover" . | fromJson }}
+{{- $domainOk := ne ($r53.domain | default "") "" }}
+{{- $zoneOk := or ($r53.createHostedZone | default false) (ne ($r53.hostedZoneId | default "") "") }}
+{{- if and ($r53.enabled | default false) $domainOk $zoneOk }}true{{- end }}
+{{- end }}
+
+{{- define "crossplane-aws-infra.endpointWatcherRenderable" -}}
+{{- $w := include "crossplane-aws-infra.mergedEndpointWatcher" . | fromJson }}
+{{- if and (ne ($w.local.fileSystemName | default "") "") (ne ($w.local.region | default "") "") (ne ($w.peer.fileSystemName | default "") "") (ne ($w.peer.region | default "") "") }}true{{- end }}
+{{- end }}
+
 {{- define "crossplane-aws-infra.fsxInstances" -}}
+{{- $fsx := include "crossplane-aws-infra.mergedFsxOntap" . | fromJson }}
 {{- $instances := list }}
-{{- if .Values.fsxOntap.enabled }}
+{{- if and ($fsx.enabled | default false) (ne ($fsx.vpcId | default "") "") (ne ($fsx.fileSystemName | default "") "") }}
   {{- $local := dict
-    "name" .Values.fsxOntap.fileSystemName
-    "region" .Values.fsxOntap.region
-    "storageCapacity" .Values.fsxOntap.storageCapacity
-    "throughputCapacity" .Values.fsxOntap.throughputCapacity
-    "storageType" .Values.fsxOntap.storageType
-    "deploymentType" .Values.fsxOntap.deploymentType
-    "vpcId" .Values.fsxOntap.vpcId
-    "subnetIds" .Values.fsxOntap.subnetIds
-    "routeTableIds" .Values.fsxOntap.routeTableIds
-    "preferredSubnetId" (.Values.fsxOntap.preferredSubnetId | default (first .Values.fsxOntap.subnetIds))
-    "allowedCidrs" .Values.fsxOntap.allowedCidrs
-    "svmName" .Values.fsxOntap.svmName
-    "rootVolumeSecurityStyle" .Values.fsxOntap.rootVolumeSecurityStyle
-    "weeklyMaintenanceStartTime" .Values.fsxOntap.weeklyMaintenanceStartTime
-    "automaticBackupRetentionDays" .Values.fsxOntap.automaticBackupRetentionDays
-    "dailyAutomaticBackupStartTime" .Values.fsxOntap.dailyAutomaticBackupStartTime
-    "tags" .Values.fsxOntap.tags
+    "name" $fsx.fileSystemName
+    "region" $fsx.region
+    "storageCapacity" $fsx.storageCapacity
+    "throughputCapacity" $fsx.throughputCapacity
+    "storageType" $fsx.storageType
+    "deploymentType" $fsx.deploymentType
+    "vpcId" $fsx.vpcId
+    "subnetIds" $fsx.subnetIds
+    "routeTableIds" $fsx.routeTableIds
+    "preferredSubnetId" ($fsx.preferredSubnetId | default (first $fsx.subnetIds))
+    "allowedCidrs" $fsx.allowedCidrs
+    "svmName" $fsx.svmName
+    "rootVolumeSecurityStyle" $fsx.rootVolumeSecurityStyle
+    "weeklyMaintenanceStartTime" $fsx.weeklyMaintenanceStartTime
+    "automaticBackupRetentionDays" $fsx.automaticBackupRetentionDays
+    "dailyAutomaticBackupStartTime" $fsx.dailyAutomaticBackupStartTime
+    "tags" $fsx.tags
   }}
   {{- $instances = append $instances $local }}
 {{- end }}
-{{- if and ((.Values.fsxOntap.peer).enabled) ((.Values.fsxOntap.peer).fileSystemName) }}
-  {{- $peer := dict
-    "name" .Values.fsxOntap.peer.fileSystemName
-    "region" .Values.fsxOntap.peer.region
-    "storageCapacity" (.Values.fsxOntap.peer.storageCapacity | default .Values.fsxOntap.storageCapacity)
-    "throughputCapacity" (.Values.fsxOntap.peer.throughputCapacity | default .Values.fsxOntap.throughputCapacity)
-    "storageType" (.Values.fsxOntap.peer.storageType | default .Values.fsxOntap.storageType)
-    "deploymentType" (.Values.fsxOntap.peer.deploymentType | default .Values.fsxOntap.deploymentType)
-    "vpcId" .Values.fsxOntap.peer.vpcId
-    "subnetIds" .Values.fsxOntap.peer.subnetIds
-    "routeTableIds" .Values.fsxOntap.peer.routeTableIds
-    "preferredSubnetId" (.Values.fsxOntap.peer.preferredSubnetId | default (first .Values.fsxOntap.peer.subnetIds))
-    "allowedCidrs" .Values.fsxOntap.peer.allowedCidrs
-    "svmName" .Values.fsxOntap.peer.svmName
-    "rootVolumeSecurityStyle" (.Values.fsxOntap.peer.rootVolumeSecurityStyle | default .Values.fsxOntap.rootVolumeSecurityStyle)
-    "weeklyMaintenanceStartTime" (.Values.fsxOntap.peer.weeklyMaintenanceStartTime | default .Values.fsxOntap.weeklyMaintenanceStartTime)
-    "automaticBackupRetentionDays" (.Values.fsxOntap.peer.automaticBackupRetentionDays | default .Values.fsxOntap.automaticBackupRetentionDays)
-    "dailyAutomaticBackupStartTime" (.Values.fsxOntap.peer.dailyAutomaticBackupStartTime | default .Values.fsxOntap.dailyAutomaticBackupStartTime)
-    "tags" (.Values.fsxOntap.peer.tags | default .Values.fsxOntap.tags)
+{{- $peer := $fsx.peer | default dict }}
+{{- if and ($peer.enabled | default false) (ne ($peer.vpcId | default "") "") (ne ($peer.fileSystemName | default "") "") }}
+  {{- $peerDict := dict
+    "name" $peer.fileSystemName
+    "region" $peer.region
+    "storageCapacity" ($peer.storageCapacity | default $fsx.storageCapacity)
+    "throughputCapacity" ($peer.throughputCapacity | default $fsx.throughputCapacity)
+    "storageType" ($peer.storageType | default $fsx.storageType)
+    "deploymentType" ($peer.deploymentType | default $fsx.deploymentType)
+    "vpcId" $peer.vpcId
+    "subnetIds" $peer.subnetIds
+    "routeTableIds" $peer.routeTableIds
+    "preferredSubnetId" ($peer.preferredSubnetId | default (first $peer.subnetIds))
+    "allowedCidrs" $peer.allowedCidrs
+    "svmName" $peer.svmName
+    "rootVolumeSecurityStyle" ($peer.rootVolumeSecurityStyle | default $fsx.rootVolumeSecurityStyle)
+    "weeklyMaintenanceStartTime" ($peer.weeklyMaintenanceStartTime | default $fsx.weeklyMaintenanceStartTime)
+    "automaticBackupRetentionDays" ($peer.automaticBackupRetentionDays | default $fsx.automaticBackupRetentionDays)
+    "dailyAutomaticBackupStartTime" ($peer.dailyAutomaticBackupStartTime | default $fsx.dailyAutomaticBackupStartTime)
+    "tags" ($peer.tags | default $fsx.tags)
   }}
-  {{- $instances = append $instances $peer }}
+  {{- $instances = append $instances $peerDict }}
 {{- end }}
 {{- $instances | toJson }}
 {{- end }}

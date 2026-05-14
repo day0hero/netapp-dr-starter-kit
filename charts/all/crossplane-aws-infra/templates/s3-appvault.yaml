@@ -1,18 +1,21 @@
 {{- if .Values.s3AppVault.enabled }}
+{{- $s3 := include "crossplane-aws-infra.mergedS3AppVault" . | fromJson }}
+{{- $bucket := required "Set tridentProtect.appVault.s3.bucketName in values-global (S3 bucket name Crossplane will create if missing in AWS)" $s3.bucketName }}
+{{- $region := required "Set tridentProtect.appVault.s3.region in values-global" $s3.region }}
 ---
 apiVersion: s3.aws.upbound.io/v1beta2
 kind: Bucket
 metadata:
-  name: {{ .Values.s3AppVault.bucketName }}
+  name: {{ $bucket }}
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
   forProvider:
-    region: {{ .Values.s3AppVault.region }}
+    region: {{ $region }}
     forceDestroy: true
     tags:
-      Name: {{ .Values.s3AppVault.bucketName }}
-      {{- range $k, $v := .Values.s3AppVault.tags }}
+      Name: {{ $bucket }}
+      {{- range $k, $v := $s3.tags }}
       {{ $k }}: {{ $v | quote }}
       {{- end }}
   {{- include "crossplane-aws-infra.providerConfigRef" . | nindent 2 }}
@@ -21,12 +24,12 @@ spec:
 apiVersion: s3.aws.upbound.io/v1beta1
 kind: BucketVersioning
 metadata:
-  name: {{ .Values.s3AppVault.bucketName }}-versioning
+  name: {{ $bucket }}-versioning
 spec:
   forProvider:
-    region: {{ .Values.s3AppVault.region }}
+    region: {{ $region }}
     bucketRef:
-      name: {{ .Values.s3AppVault.bucketName }}
+      name: {{ $bucket }}
     versioningConfiguration:
       - status: Enabled
   {{- include "crossplane-aws-infra.providerConfigRef" . | nindent 2 }}
@@ -35,12 +38,12 @@ spec:
 apiVersion: s3.aws.upbound.io/v1beta1
 kind: BucketServerSideEncryptionConfiguration
 metadata:
-  name: {{ .Values.s3AppVault.bucketName }}-sse
+  name: {{ $bucket }}-sse
 spec:
   forProvider:
-    region: {{ .Values.s3AppVault.region }}
+    region: {{ $region }}
     bucketRef:
-      name: {{ .Values.s3AppVault.bucketName }}
+      name: {{ $bucket }}
     rule:
       - applyServerSideEncryptionByDefault:
           - sseAlgorithm: AES256
@@ -51,12 +54,12 @@ spec:
 apiVersion: s3.aws.upbound.io/v1beta1
 kind: BucketPublicAccessBlock
 metadata:
-  name: {{ .Values.s3AppVault.bucketName }}-public-access
+  name: {{ $bucket }}-public-access
 spec:
   forProvider:
-    region: {{ .Values.s3AppVault.region }}
+    region: {{ $region }}
     bucketRef:
-      name: {{ .Values.s3AppVault.bucketName }}
+      name: {{ $bucket }}
     blockPublicAcls: true
     blockPublicPolicy: true
     ignorePublicAcls: true

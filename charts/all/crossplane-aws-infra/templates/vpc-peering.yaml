@@ -1,8 +1,9 @@
-{{- if .Values.vpcPeering.enabled }}
+{{- if include "crossplane-aws-infra.vpcPeeringRenderable" . | trim }}
 {{- $providerConfigRef := .Values.global.providerConfigRef }}
-{{- $tags := .Values.vpcPeering.tags }}
-{{- $prod := .Values.vpcPeering.prod }}
-{{- $dr := .Values.vpcPeering.dr }}
+{{- $vp := include "crossplane-aws-infra.mergedVpcPeering" . | fromJson }}
+{{- $tags := $vp.tags }}
+{{- $prod := $vp.prod }}
+{{- $dr := $vp.dr }}
 
 ---
 apiVersion: ec2.aws.upbound.io/v1beta1

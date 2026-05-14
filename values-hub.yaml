@@ -24,8 +24,7 @@ tridentProtect:
       minute: "0"
       snapshotRetention: "24"
       backupRetention: "7"
-# FSx endpoint IPs are dynamically discovered by fsx-endpoint-watcher CronJob.
-# Only SVM names are needed here (deterministic, set by crossplane-setup).
+# FSx endpoint IPs are discovered at runtime by fsx-endpoint-watcher (after Crossplane provisions FSx).
 tridentFSX:
   mgmtLIF: ""
   clusterLIF: ""
@@ -384,95 +383,47 @@ clusterGroup:
         - name: clusterGroup
           value: secondary
 
-# The hub cluster has the FSx ONTAP filesystem and S3 AppVault; these are not replicated to the
-# DR cluster but can be used as sources for replication to other clusters in the pattern.
+# Crossplane AWS resources: VPC/subnets/Route53/S3/FSx values come from in-cluster discovery
+# (ConfigMap crossplane-network-discovery). Git holds defaults and feature flags only.
+crossplaneBootstrap:
+  enabled: true
+  schedule: "*/5 * * * *"
+  externalSecrets:
+    drClusterKubeconfig: true
+    primaryClusterKubeconfig: false
+  remoteKubeconfig:
+    secretName: ocp-dr-cluster-kubeconfig
+    secretKey: kubeconfig
+    optional: true
 fsxOntap:
   enabled: true
-  region: "" # Provided by crossplane-setup
-  fileSystemName: "" # Provided by crossplane-setup
-  vpcId: "" # Provided by crossplane-setup
-  subnetIds: []
-  routeTableIds: []
-  preferredSubnetId: "" # Provided by crossplane-setup
-  allowedCidrs: []
   storageCapacity: 1024
   throughputCapacity: 1024
   storageType: SSD
   deploymentType: MULTI_AZ_1
   svmName: SVM1
-  peer:
-    enabled: true
-    region: "" # Provided by crossplane-setup
-    fileSystemName: "" # Provided by crossplane-setup
-    vpcId: "" # Provided by crossplane-setup
-    subnetIds: []
-    routeTableIds: []
-    preferredSubnetId: "" # Provided by crossplane-setup
-    allowedCidrs: []
-    svmName: SVM2
 s3AppVault:
   enabled: true
-  bucketName: "" # Matches .Values.tridentProtect.appVault.name in values-global.yaml; provided by crossplane-setup
-  region: "" # Provided by crossplane-setup
 endpointWatcher:
   enabled: true
-  local:
-    fileSystemName: "" # Provided by crossplane-setup
-    region: "" # Provided by crossplane-setup
-    svmName: SVM1
-  peer:
-    fileSystemName: "" # Provided by crossplane-setup
-    region: "" # Provided by crossplane-setup
-    svmName: SVM2
 vpcPeering:
   enabled: true
-  prod:
-    region: "" # Provided by crossplane-setup
-    vpcId: "" # Provided by crossplane-setup
-    vpcCidr: "" # Provided by crossplane-setup
-    clusterName: "" # Provided by crossplane-setup
-    routeTableIds: []
-  dr:
-    region: "" # Provided by crossplane-setup
-    vpcId: "" # Provided by crossplane-setup
-    vpcCidr: "" # Provided by crossplane-setup
-    clusterName: "" # Provided by crossplane-setup
-    routeTableIds: []
 route53Failover:
   enabled: true
   perAppHealthChecks: false
   followPromotedDns:
     enabled: true
-  # Omit secondary health check so DNS follows primary-down (AMR Failover) without
-  # requiring a 2xx/3xx from the DR router on healthCheckPath. Set true to gate DR on probe success.
   attachSecondaryHealthCheck: false
-  domain: dr.example.com # Provided by crossplane-setup; auto-derived from cluster DNS if omitted
-  # If false: set hostedZoneId to the Route53 zone ID for `domain` (see ansible dr_failover_hosted_zone_id or AWS console).
-  # If true: Crossplane creates the zone; delegate NS at the parent registrar.
   createHostedZone: false
-  hostedZoneId: "" # Provided by crossplane-setup or set to existing zone ID if createHostedZone is false
-  # Router targets default to router-default.<domain> where templates now prefer:
-  # global.localClusterDomain (primary) and global.drClusterDomain (secondary).
-  # You can still override per environment with primaryIngressHostname/secondaryIngressHostname.
   healthCheckPath: /
-  # Per-app primaryHealthCheckFqdn / secondaryHealthCheckFqdn are optional; these apply to all apps when omitted.
   apps:
     - name: boutique
     - name: wordpress
-  region: us-west-1
-# Hub: weighted Route53 from S3 (dr-dns-state-export on DR). Requires IAM on aws-provider creds.
 drDnsReconciler:
   enabled: true
   namespace: crossplane-system
   schedule: "*/1 * * * *"
-  s3Bucket: trident-protect-bucket
-  s3Region: us-west-1
   s3Key: dr-metadata/amr-dns-target.json
-  hostedZoneId: "" # Provided by crossplane-setup or set to existing zone ID if createHostedZone is false
-  domain: dr.example.com # Provided by crossplane-setup; auto-derived from cluster DNS if omitted
-  # PRIMARY_INGRESS/SECONDARY_INGRESS now default from:
-  # global.localClusterDomain (preferred) + global.drClusterDomain.
-  # You can override with primaryIngressHostname/secondaryIngressHostname if needed.
   recordTtl: 60
   apps:
     - name: boutique

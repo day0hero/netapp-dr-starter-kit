@@ -1,7 +1,7 @@
-{{- if .Values.route53Failover.enabled }}
+{{- if include "crossplane-aws-infra.route53Renderable" . | trim }}
 {{- $providerConfigRef := .Values.global.providerConfigRef }}
-{{- $r53 := .Values.route53Failover }}
-{{- $g := .Values.global | default dict }}
+{{- $r53 := include "crossplane-aws-infra.mergedRoute53Failover" . | fromJson }}
+{{- $g := include "crossplane-aws-infra.mergedGlobal" . | fromJson }}
 {{- $primaryDomain := (coalesce $g.localClusterDomain $g.clusterDomain) }}
 {{- $secondaryDomain := (coalesce $g.drClusterDomain $g.hubClusterDomain) }}
 {{- $primaryRouter := include "crossplane-aws-infra.routerHostname" (dict "explicit" $r53.primaryIngressHostname "domain" $primaryDomain) | trim }}

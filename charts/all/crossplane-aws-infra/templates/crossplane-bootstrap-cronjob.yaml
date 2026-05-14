@@ -1,0 +1,92 @@
+{{- if .Values.crossplaneBootstrap.enabled }}
+{{- $b := .Values.crossplaneBootstrap }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: crossplane-network-discovery
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            {{- include "crossplane-aws-infra.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: crossplane-network-discovery
+          containers:
+            - name: discover
+              image: {{ .Values.endpointWatcher.image | quote }}
+              command: ["python3", "/scripts/discover-network.py"]
+              env:
+                - name: PATTERN_CLUSTER_ROLE
+                  value: {{ .Values.clusterGroup.name | default "hub" | quote }}
+                - name: REMOTE_KUBECONFIG_PATH
+                  value: /peer/kubeconfig
+                - name: DISCOVERY_CONFIGMAP_NAMESPACE
+                  value: {{ $b.discoveryNamespace | default .Release.Namespace | quote }}
+                - name: DISCOVERY_CONFIGMAP_NAME
+                  value: {{ $b.discoveryConfigMapName | default "crossplane-network-discovery" | quote }}
+                - name: TARGET_NAMESPACE
+                  value: {{ .Release.Namespace | quote }}
+                - name: AWS_SHARED_CREDENTIALS_FILE
+                  value: /aws/credentials
+                - name: AWS_EC2_METADATA_DISABLED
+                  value: "true"
+                - name: APPVAULT_BUCKET
+                  value: {{ (.Values.tridentProtect.appVault.s3.bucketName) | default "" | quote }}
+                - name: APPVAULT_REGION
+                  value: {{ (.Values.tridentProtect.appVault.s3.region) | default "" | quote }}
+                - name: DR_FAILOVER_DOMAIN
+                  value: {{ (.Values.drFailover.domain) | default "" | quote }}
+                - name: ROUTE53_DISCOVER_HOSTED_ZONE
+                  value: {{ $b.route53.discoverHostedZone | default true | toString | quote }}
+                - name: ROUTE53_DISCOVER_HOSTED_ZONE_PARENT
+                  value: {{ $b.route53.discoverHostedZoneParent | default true | toString | quote }}
+                - name: ROUTE53_ZONE_LOOKUP_NAME
+                  value: {{ $b.route53.zoneLookupName | default "" | quote }}
+                - name: ROUTE53_HOSTED_ZONE_ID_EXPLICIT
+                  value: {{ .Values.route53Failover.hostedZoneId | default "" | quote }}
+                - name: ROUTE53_CREATE_HOSTED_ZONE
+                  value: {{ .Values.route53Failover.createHostedZone | default true | toString | quote }}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: aws-creds
+                  mountPath: /aws
+                  readOnly: true
+                - name: peer-kubeconfig
+                  mountPath: /peer
+                  readOnly: true
+          volumes:
+            - name: scripts
+              configMap:
+                name: crossplane-bootstrap-scripts
+                defaultMode: 0555
+                items:
+                  - key: discover-network.py
+                    path: discover-network.py
+            - name: aws-creds
+              secret:
+                secretName: {{ .Values.crossplane.providerConfig.credentials.secretName }}
+                items:
+                  - key: {{ .Values.crossplane.providerConfig.credentials.secretKey }}
+                    path: credentials
+            - name: peer-kubeconfig
+              secret:
+                secretName: {{ $b.remoteKubeconfig.secretName }}
+                optional: {{ $b.remoteKubeconfig.optional | default true }}
+                items:
+                  - key: {{ $b.remoteKubeconfig.secretKey }}
+                    path: kubeconfig
+{{- end }}

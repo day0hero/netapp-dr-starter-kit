@@ -1,6 +1,6 @@
-{{- if .Values.drDnsReconciler.enabled }}
-{{- $c := .Values.drDnsReconciler }}
-{{- $g := .Values.global | default dict }}
+{{- if and .Values.drDnsReconciler.enabled (include "dr-dns-reconciler.discoveryRenderable" . | trim) }}
+{{- $c := include "dr-dns-reconciler.mergedDrDns" . | fromJson }}
+{{- $g := include "dr-dns-reconciler.mergedGlobal" . | fromJson }}
 {{- $primaryDomain := (coalesce $g.localClusterDomain $g.clusterDomain) }}
 {{- $secondaryDomain := (coalesce $g.drClusterDomain $g.hubClusterDomain) }}
 {{- $primaryIngress := include "dr-dns-reconciler.routerHostname" (dict "explicit" $c.primaryIngressHostname "domain" $primaryDomain) | trim }}

@@ -81,7 +81,7 @@ endef
 ##@ Crossplane Infrastructure
 
 .PHONY: crossplane-setup
-crossplane-setup: ## Discover clusters and write Crossplane values (then commit+push for ArgoCD)
+crossplane-setup: ## Optional: discover clusters and write Crossplane values locally (break-glass; default is in-cluster discovery)
 	$(call _validate_kubeconfigs,crossplane-setup)
 	@echo "=========================================="
 	@echo "Crossplane Infrastructure Setup"

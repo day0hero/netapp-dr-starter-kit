@@ -1,0 +1,95 @@
+{{- if .Values.crossplaneBootstrap.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crossplane-network-discovery
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-discovery-openshift" .Release.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["config.openshift.io"]
+    resources: ["infrastructures", "dnses", "ingresses"]
+    verbs: ["get", "list"]
+  - apiGroups: ["route53.aws.upbound.io"]
+    resources: ["zones"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-discovery-openshift" .Release.Name | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-discovery-openshift" .Release.Name | trunc 63 | trimSuffix "-" }}
+subjects:
+  - kind: ServiceAccount
+    name: crossplane-network-discovery
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crossplane-network-discovery-kubesystem
+  namespace: kube-system
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["cluster-config-v1"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crossplane-network-discovery-kubesystem
+  namespace: kube-system
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: crossplane-network-discovery-kubesystem
+subjects:
+  - kind: ServiceAccount
+    name: crossplane-network-discovery
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crossplane-network-discovery-configmaps
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crossplane-network-discovery-configmaps
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: crossplane-network-discovery-configmaps
+subjects:
+  - kind: ServiceAccount
+    name: crossplane-network-discovery
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,12 @@
+{{- if .Values.crossplaneBootstrap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crossplane-bootstrap-scripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+data:
+  discover-network.py: |
+{{ trim (.Files.Get "files/discover-network.py") | nindent 4 }}
+{{- end }}
