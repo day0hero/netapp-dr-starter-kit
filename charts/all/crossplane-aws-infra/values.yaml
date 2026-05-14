@@ -172,9 +172,10 @@ route53Failover:
     ManagedBy: Crossplane
     Purpose: DR-Failover
 
-# JSON string (same object shape as discovery.json). Populated automatically when
-# crossplaneBootstrap.argocd.patchApplication is enabled; or set manually / via Argo parameter.
+# JSON string (same object shape as discovery.json). For local Helm; Argo CD uses B64 below.
 netappDrDiscoveryJson: ""
+# Base64(JSON) — set by discovery Argo patch; avoids Helm --set breaking on commas in raw JSON.
+netappDrDiscoveryJsonB64: ""
 
 # ---------------------------------------------------------------------------
 # In-cluster network discovery (writes ConfigMap discovery.json for Helm merge)
@@ -195,7 +196,7 @@ crossplaneBootstrap:
   externalSecrets:
     drClusterKubeconfig: false
     primaryClusterKubeconfig: false
-  # After discovery, patch Argo CD Application(s) so the next sync passes netappDrDiscoveryJson to Helm.
+  # After discovery, patch Argo CD Application(s) with netappDrDiscoveryJsonB64 (Helm-safe) for the next sync.
   argocd:
     patchApplication:
       enabled: false

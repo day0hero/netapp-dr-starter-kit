@@ -38,14 +38,19 @@ Required to adopt failover CNAME sets that already exist in Route53 (avoids Inva
 Discovery merge data (same shape as discovery.json written by crossplane-network-discovery).
 
 Argo CD does not evaluate Helm lookup() against the destination cluster, so ConfigMap-based
-lookup is unreliable in GitOps. Prefer netappDrDiscoveryJson (Helm value / Argo parameter).
+lookup is unreliable in GitOps. Prefer netappDrDiscoveryJson (local/file values) or
+netappDrDiscoveryJsonB64 (Argo helm.parameters — raw JSON breaks Helm --set parsing on commas).
 
-Priority: netappDrDiscoveryJson > ConfigMap lookup (local helm / tooling) > empty.
+Priority: netappDrDiscoveryJson > netappDrDiscoveryJsonB64 > ConfigMap lookup (local helm) > empty.
 */}}
 {{- define "crossplane-aws-infra.discoveryDict" -}}
 {{- $inline := .Values.netappDrDiscoveryJson | default "" | trim }}
 {{- if $inline }}
 {{- $inline | fromJson | toJson }}
+{{- else }}
+{{- $b64 := .Values.netappDrDiscoveryJsonB64 | default "" | trim }}
+{{- if $b64 }}
+{{- $b64 | b64dec | fromJson | toJson }}
 {{- else }}
 {{- $cb := .Values.crossplaneBootstrap | default dict }}
 {{- $ns := $cb.discoveryNamespace | default .Release.Namespace }}
@@ -55,6 +60,7 @@ Priority: netappDrDiscoveryJson > ConfigMap lookup (local helm / tooling) > empt
 {{- index $cm.data "discovery.json" | fromJson | toJson }}
 {{- else }}
 {{- dict | toJson }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

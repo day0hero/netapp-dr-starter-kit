@@ -5,6 +5,7 @@ Writes a ConfigMap data key discovery.json consumed by Helm lookup merge.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -270,28 +271,45 @@ def apply_configmap(namespace: str, name: str, data: Dict[str, str]) -> None:
             pass
 
 
-def _upsert_helm_parameters(helm: dict, param_name: str, param_value: str) -> None:
+DISCOVERY_HELM_PARAM_LEGACY = "netappDrDiscoveryJson"
+DISCOVERY_HELM_PARAM_B64 = "netappDrDiscoveryJsonB64"
+
+
+def _strip_discovery_helm_params(helm: dict) -> None:
+    params = helm.get("parameters")
+    if not params:
+        return
+    drop = {DISCOVERY_HELM_PARAM_LEGACY, DISCOVERY_HELM_PARAM_B64}
+    helm["parameters"] = [p for p in params if p.get("name") not in drop]
+
+
+def _append_discovery_param_b64(helm: dict, b64_value: str) -> None:
     params = helm.setdefault("parameters", [])
-    for p in params:
-        if p.get("name") == param_name:
-            p["value"] = param_value
-            return
-    params.append({"name": param_name, "value": param_value})
+    params.append(
+        {
+            "name": DISCOVERY_HELM_PARAM_B64,
+            "value": b64_value,
+            "forceString": True,
+        }
+    )
 
 
 def upsert_netapp_discovery_json_on_application(app: dict, payload: Dict[str, Any]) -> None:
-    val = json.dumps(payload, separators=(",", ":"))
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    b64_val = base64.b64encode(raw).decode("ascii")
     spec = app.setdefault("spec", {})
     sources = spec.get("sources")
     if sources:
         for src in sources:
             helm = src.get("helm")
             if helm is not None:
-                _upsert_helm_parameters(helm, "netappDrDiscoveryJson", val)
+                _strip_discovery_helm_params(helm)
+                _append_discovery_param_b64(helm, b64_val)
         return
     src = spec.setdefault("source", {})
     helm = src.setdefault("helm", {})
-    _upsert_helm_parameters(helm, "netappDrDiscoveryJson", val)
+    _strip_discovery_helm_params(helm)
+    _append_discovery_param_b64(helm, b64_val)
 
 
 def find_application_by_path_substring(namespace: str, substr: str) -> Optional[str]:
@@ -365,7 +383,7 @@ def patch_argo_applications_for_hub(payload: Dict[str, Any]) -> None:
     def do_patch(ns: str, name: str) -> None:
         if not ns or not name or (ns, name) in done:
             return
-        print(f"Patching Argo CD Application {ns}/{name} (netappDrDiscoveryJson)")
+        print(f"Patching Argo CD Application {ns}/{name} ({DISCOVERY_HELM_PARAM_B64})")
         replace_argo_application(ns, name, payload)
         done.add((ns, name))
 
