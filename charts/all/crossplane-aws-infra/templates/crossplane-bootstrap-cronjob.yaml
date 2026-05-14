@@ -3,8 +3,17 @@
 {{- $argo := $b.argocd | default dict }}
 {{- $p1 := $argo.patchApplication | default dict }}
 {{- $p2 := $argo.patchDrDnsApplication | default dict }}
-{{- $argoNs := $p1.applicationNamespace | default "openshift-gitops" }}
-{{- $drDnsNs := $p2.applicationNamespace | default $argoNs }}
+{{- /* VP child Applications live in {global.pattern}-hub; classic GitOps uses openshift-gitops */}}
+{{- $argoNs := "openshift-gitops" }}
+{{- if $p1.applicationNamespace }}
+{{- $argoNs = $p1.applicationNamespace }}
+{{- else if .Values.global.pattern }}
+{{- $argoNs = printf "%s-hub" .Values.global.pattern }}
+{{- end }}
+{{- $drDnsNs := $argoNs }}
+{{- if $p2.applicationNamespace }}
+{{- $drDnsNs = $p2.applicationNamespace }}
+{{- end }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:

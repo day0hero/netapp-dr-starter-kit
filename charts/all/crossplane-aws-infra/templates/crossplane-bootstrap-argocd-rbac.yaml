@@ -3,8 +3,16 @@
 {{- $argo := $b.argocd | default dict }}
 {{- $p1 := $argo.patchApplication | default dict }}
 {{- $p2 := $argo.patchDrDnsApplication | default dict }}
-{{- $argoNs := $p1.applicationNamespace | default "openshift-gitops" }}
-{{- $drDnsNs := $p2.applicationNamespace | default $argoNs }}
+{{- $argoNs := "openshift-gitops" }}
+{{- if $p1.applicationNamespace }}
+{{- $argoNs = $p1.applicationNamespace }}
+{{- else if $.Values.global.pattern }}
+{{- $argoNs = printf "%s-hub" $.Values.global.pattern }}
+{{- end }}
+{{- $drDnsNs := $argoNs }}
+{{- if $p2.applicationNamespace }}
+{{- $drDnsNs = $p2.applicationNamespace }}
+{{- end }}
 {{- $rbacNs := list }}
 {{- if $p1.enabled }}
 {{- $rbacNs = append $rbacNs $argoNs }}

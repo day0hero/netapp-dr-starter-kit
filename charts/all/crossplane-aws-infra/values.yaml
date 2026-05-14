@@ -201,11 +201,12 @@ crossplaneBootstrap:
       enabled: false
       # When applicationName is empty and autoDiscover is true, pick the first Application whose path/repo mentions crossplane-aws-infra.
       autoDiscover: true
-      applicationNamespace: openshift-gitops
+      # Empty: use global.pattern + "-hub" (Validated Patterns) if global.pattern is set, else openshift-gitops.
+      applicationNamespace: ""
       applicationName: ""
     patchDrDnsApplication:
       enabled: false
       autoDiscover: true
-      # Defaults to patchApplication.applicationNamespace when empty.
+      # Empty: same namespace as patchApplication (after defaults above).
       applicationNamespace: ""
       applicationName: ""

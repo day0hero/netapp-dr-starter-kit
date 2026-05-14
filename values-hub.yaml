@@ -399,12 +399,10 @@ crossplaneBootstrap:
     patchApplication:
       enabled: true
       autoDiscover: true
-      applicationNamespace: openshift-gitops
       applicationName: ""
     patchDrDnsApplication:
       enabled: true
       autoDiscover: true
-      applicationNamespace: ""
       applicationName: ""
 fsxOntap:
   enabled: true
