@@ -11,7 +11,7 @@ tridentProtect:
     name: s3-appvault
     s3:
       # Crossplane creates this bucket in AWS when it does not already exist (name must be globally unique).
-      bucketName: ""
+      bucketName: xrd-appvault-protect
       region: us-west-1
   applications:
     - name: boutique
