@@ -1,0 +1,46 @@
+{{- if .Values.crossplaneBootstrap.enabled }}
+{{- $b := .Values.crossplaneBootstrap }}
+{{- $argo := $b.argocd | default dict }}
+{{- $p1 := $argo.patchApplication | default dict }}
+{{- $p2 := $argo.patchDrDnsApplication | default dict }}
+{{- $argoNs := $p1.applicationNamespace | default "openshift-gitops" }}
+{{- $drDnsNs := $p2.applicationNamespace | default $argoNs }}
+{{- $rbacNs := list }}
+{{- if $p1.enabled }}
+{{- $rbacNs = append $rbacNs $argoNs }}
+{{- end }}
+{{- if $p2.enabled }}
+{{- $rbacNs = append $rbacNs $drDnsNs }}
+{{- end }}
+{{- $roleName := printf "%s-argocd-apps" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- range ($rbacNs | uniq) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $roleName }}
+  namespace: {{ . }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $roleName }}
+  namespace: {{ . }}
+  labels:
+    {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $roleName }}
+subjects:
+  - kind: ServiceAccount
+    name: crossplane-network-discovery
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

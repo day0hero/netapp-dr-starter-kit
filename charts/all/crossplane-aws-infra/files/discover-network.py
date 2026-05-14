@@ -270,6 +270,111 @@ def apply_configmap(namespace: str, name: str, data: Dict[str, str]) -> None:
             pass
 
 
+def _upsert_helm_parameters(helm: dict, param_name: str, param_value: str) -> None:
+    params = helm.setdefault("parameters", [])
+    for p in params:
+        if p.get("name") == param_name:
+            p["value"] = param_value
+            return
+    params.append({"name": param_name, "value": param_value})
+
+
+def upsert_netapp_discovery_json_on_application(app: dict, payload: Dict[str, Any]) -> None:
+    val = json.dumps(payload, separators=(",", ":"))
+    spec = app.setdefault("spec", {})
+    sources = spec.get("sources")
+    if sources:
+        for src in sources:
+            helm = src.get("helm")
+            if helm is not None:
+                _upsert_helm_parameters(helm, "netappDrDiscoveryJson", val)
+        return
+    src = spec.setdefault("source", {})
+    helm = src.setdefault("helm", {})
+    _upsert_helm_parameters(helm, "netappDrDiscoveryJson", val)
+
+
+def find_application_by_path_substring(namespace: str, substr: str) -> Optional[str]:
+    raw = subprocess.run(
+        ["oc", "get", "applications.argoproj.io", "-n", namespace, "-o", "json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    data = json.loads(raw)
+    names: List[str] = []
+    for item in data.get("items") or []:
+        spec = item.get("spec") or {}
+        candidates = []
+        if spec.get("source"):
+            candidates.append(spec["source"])
+        for s in spec.get("sources") or []:
+            candidates.append(s)
+        for src in candidates:
+            blob = (src.get("path") or "") + (src.get("chart") or "") + (src.get("repoURL") or "")
+            if substr in blob:
+                names.append(item["metadata"]["name"])
+                break
+    if not names:
+        return None
+    names.sort()
+    return names[0]
+
+
+def replace_argo_application(namespace: str, name: str, payload: Dict[str, Any]) -> None:
+    raw = subprocess.run(
+        ["oc", "get", "application.argoproj.io", name, "-n", namespace, "-o", "json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    app = json.loads(raw)
+    upsert_netapp_discovery_json_on_application(app, payload)
+    path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(app, f)
+            path = f.name
+        subprocess.run(["oc", "replace", "-f", path], check=True)
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def patch_argo_applications_for_hub(payload: Dict[str, Any]) -> None:
+    patch_cp = os.environ.get("PATCH_ARGOCD_CROSSPLANE_APP", "false").lower() == "true"
+    patch_dr = os.environ.get("PATCH_ARGOCD_DR_DNS_APP", "false").lower() == "true"
+    if not patch_cp and not patch_dr:
+        return
+    argo_ns = os.environ.get("ARGOCD_APPLICATION_NAMESPACE", "").strip()
+    argo_name = os.environ.get("ARGOCD_APPLICATION_NAME", "").strip()
+    auto = os.environ.get("PATCH_ARGOCD_AUTO", "false").lower() == "true"
+    if patch_cp and argo_ns and not argo_name and auto:
+        argo_name = find_application_by_path_substring(argo_ns, "crossplane-aws-infra") or ""
+    dr_ns = os.environ.get("ARGOCD_DR_DNS_APPLICATION_NAMESPACE", "").strip() or argo_ns
+    dr_name = os.environ.get("ARGOCD_DR_DNS_APPLICATION_NAME", "").strip()
+    dr_auto = os.environ.get("PATCH_ARGOCD_DR_DNS_AUTO", "false").lower() == "true"
+    if patch_dr and dr_ns and not dr_name and dr_auto:
+        dr_name = find_application_by_path_substring(dr_ns, "dr-dns-reconciler") or ""
+
+    done: set[tuple[str, str]] = set()
+
+    def do_patch(ns: str, name: str) -> None:
+        if not ns or not name or (ns, name) in done:
+            return
+        print(f"Patching Argo CD Application {ns}/{name} (netappDrDiscoveryJson)")
+        replace_argo_application(ns, name, payload)
+        done.add((ns, name))
+
+    if patch_cp:
+        do_patch(argo_ns, argo_name)
+    if patch_dr:
+        do_patch(dr_ns, dr_name)
+
+
 def main() -> int:
     role = os.environ.get("PATTERN_CLUSTER_ROLE", "hub").strip()
     remote_kc = os.environ.get("REMOTE_KUBECONFIG_PATH", "").strip()
@@ -425,6 +530,7 @@ def main() -> int:
     }
     apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
     print("hub discovery written")
+    patch_argo_applications_for_hub(out)
     return 0
 
 

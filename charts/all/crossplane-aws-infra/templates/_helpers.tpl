@@ -35,9 +35,18 @@ Required to adopt failover CNAME sets that already exist in Route53 (avoids Inva
 {{- end }}
 
 {{/*
-ConfigMap discovery.json (written by crossplane-network-discovery CronJob) merged over Git values.
+Discovery merge data (same shape as discovery.json written by crossplane-network-discovery).
+
+Argo CD does not evaluate Helm lookup() against the destination cluster, so ConfigMap-based
+lookup is unreliable in GitOps. Prefer netappDrDiscoveryJson (Helm value / Argo parameter).
+
+Priority: netappDrDiscoveryJson > ConfigMap lookup (local helm / tooling) > empty.
 */}}
 {{- define "crossplane-aws-infra.discoveryDict" -}}
+{{- $inline := .Values.netappDrDiscoveryJson | default "" | trim }}
+{{- if $inline }}
+{{- $inline | fromJson | toJson }}
+{{- else }}
 {{- $cb := .Values.crossplaneBootstrap | default dict }}
 {{- $ns := $cb.discoveryNamespace | default .Release.Namespace }}
 {{- $name := $cb.discoveryConfigMapName | default "crossplane-network-discovery" }}
@@ -46,6 +55,7 @@ ConfigMap discovery.json (written by crossplane-network-discovery CronJob) merge
 {{- index $cm.data "discovery.json" | fromJson | toJson }}
 {{- else }}
 {{- dict | toJson }}
+{{- end }}
 {{- end }}
 {{- end }}
 

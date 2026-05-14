@@ -38,6 +38,10 @@ if empty, derive from drFailover.apps so DR routes and DNS stay aligned with one
 {{- end }}
 
 {{- define "dr-dns-reconciler.discoveryDict" -}}
+{{- $inline := .Values.netappDrDiscoveryJson | default "" | trim }}
+{{- if $inline }}
+{{- $inline | fromJson | toJson }}
+{{- else }}
 {{- $nd := .Values.networkDiscovery | default dict }}
 {{- $ns := $nd.configMapNamespace | default "crossplane-system" }}
 {{- $name := $nd.configMapName | default "crossplane-network-discovery" }}
@@ -46,6 +50,7 @@ if empty, derive from drFailover.apps so DR routes and DNS stay aligned with one
 {{- index $cm.data "discovery.json" | fromJson | toJson }}
 {{- else }}
 {{- dict | toJson }}
+{{- end }}
 {{- end }}
 {{- end }}
 

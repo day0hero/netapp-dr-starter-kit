@@ -395,6 +395,17 @@ crossplaneBootstrap:
     secretName: ocp-dr-cluster-kubeconfig
     secretKey: kubeconfig
     optional: true
+  argocd:
+    patchApplication:
+      enabled: true
+      autoDiscover: true
+      applicationNamespace: openshift-gitops
+      applicationName: ""
+    patchDrDnsApplication:
+      enabled: true
+      autoDiscover: true
+      applicationNamespace: ""
+      applicationName: ""
 fsxOntap:
   enabled: true
   storageCapacity: 1024

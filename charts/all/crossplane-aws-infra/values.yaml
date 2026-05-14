@@ -172,6 +172,10 @@ route53Failover:
     ManagedBy: Crossplane
     Purpose: DR-Failover
 
+# JSON string (same object shape as discovery.json). Populated automatically when
+# crossplaneBootstrap.argocd.patchApplication is enabled; or set manually / via Argo parameter.
+netappDrDiscoveryJson: ""
+
 # ---------------------------------------------------------------------------
 # In-cluster network discovery (writes ConfigMap discovery.json for Helm merge)
 # ---------------------------------------------------------------------------
@@ -191,3 +195,17 @@ crossplaneBootstrap:
   externalSecrets:
     drClusterKubeconfig: false
     primaryClusterKubeconfig: false
+  # After discovery, patch Argo CD Application(s) so the next sync passes netappDrDiscoveryJson to Helm.
+  argocd:
+    patchApplication:
+      enabled: false
+      # When applicationName is empty and autoDiscover is true, pick the first Application whose path/repo mentions crossplane-aws-infra.
+      autoDiscover: true
+      applicationNamespace: openshift-gitops
+      applicationName: ""
+    patchDrDnsApplication:
+      enabled: false
+      autoDiscover: true
+      # Defaults to patchApplication.applicationNamespace when empty.
+      applicationNamespace: ""
+      applicationName: ""

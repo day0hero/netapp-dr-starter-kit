@@ -1,5 +1,10 @@
 {{- if .Values.crossplaneBootstrap.enabled }}
 {{- $b := .Values.crossplaneBootstrap }}
+{{- $argo := $b.argocd | default dict }}
+{{- $p1 := $argo.patchApplication | default dict }}
+{{- $p2 := $argo.patchDrDnsApplication | default dict }}
+{{- $argoNs := $p1.applicationNamespace | default "openshift-gitops" }}
+{{- $drDnsNs := $p2.applicationNamespace | default $argoNs }}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -58,6 +63,22 @@ spec:
                   value: {{ .Values.route53Failover.hostedZoneId | default "" | quote }}
                 - name: ROUTE53_CREATE_HOSTED_ZONE
                   value: {{ .Values.route53Failover.createHostedZone | default true | toString | quote }}
+                - name: PATCH_ARGOCD_CROSSPLANE_APP
+                  value: {{ $p1.enabled | default false | toString | quote }}
+                - name: PATCH_ARGOCD_DR_DNS_APP
+                  value: {{ $p2.enabled | default false | toString | quote }}
+                - name: ARGOCD_APPLICATION_NAMESPACE
+                  value: {{ $argoNs | quote }}
+                - name: ARGOCD_APPLICATION_NAME
+                  value: {{ $p1.applicationName | default "" | quote }}
+                - name: PATCH_ARGOCD_AUTO
+                  value: {{ $p1.autoDiscover | default true | toString | quote }}
+                - name: ARGOCD_DR_DNS_APPLICATION_NAMESPACE
+                  value: {{ $drDnsNs | quote }}
+                - name: ARGOCD_DR_DNS_APPLICATION_NAME
+                  value: {{ $p2.applicationName | default "" | quote }}
+                - name: PATCH_ARGOCD_DR_DNS_AUTO
+                  value: {{ $p2.autoDiscover | default true | toString | quote }}
               volumeMounts:
                 - name: scripts
                   mountPath: /scripts

@@ -2,6 +2,9 @@ global:
   clusterDomain: ""
   drClusterDomain: ""
 
+# Same JSON shape as hub discovery (subset used for dr-dns merge). Set via Argo helm parameter.
+netappDrDiscoveryJson: ""
+
 networkDiscovery:
   configMapNamespace: crossplane-system
   configMapName: crossplane-network-discovery

@@ -17,7 +17,7 @@ The default deployment method is the **Crossplane** path below.
 
 1. **Declare** the Trident Protect AppVault S3 bucket name and region in **`values-global.yaml`** (`tridentProtect.appVault.s3`). Crossplane creates the bucket in AWS if it does not already exist.
 2. **Load kubeconfigs into Vault** via **`~/values-secret-netapp-dr-starter-kit.yaml`** (see `values-secret.yaml.template`): **DR** kubeconfig on the hub, **primary** kubeconfig on the secondary cluster, using the commented `ocp-*-cluster-kubeconfig` entries. External Secrets materialize them as Kubernetes Secrets.
-3. **Discovery CronJob** (`crossplane-network-discovery`) runs on the hub and secondary, writes **`crossplane-network-discovery`** / `discovery.json`, and the next Argo CD sync **renders** FSx, S3, VPC peering, Route53, and endpoint watcher settings from that data.
+3. **Discovery CronJob** (`crossplane-network-discovery`) runs on the hub and secondary, writes **`crossplane-network-discovery`** / `discovery.json`, and Helm **merges** that shape into FSx, S3, VPC peering, Route53, and endpoint watcher settings. On the hub, **`crossplaneBootstrap.argocd`** (see **`values-hub.yaml`**) can patch Argo CD Applications with a Helm parameter **`netappDrDiscoveryJson`** so the next sync does not depend on Helm **`lookup()`**, which Argo CD often cannot evaluate against the destination cluster.
 
 Optional break-glass: **`make crossplane-setup`** still runs Ansible to **write** the same fields into `values-*.yaml` locally if you cannot rely on in-cluster discovery.
 
@@ -63,7 +63,7 @@ chmod 600 ~/.fsx
 ./pattern.sh make install
 ```
 
-After the first successful discovery Job on the hub, **refresh or re-sync** the Argo CD `crossplane-aws-infra` application so Helm `lookup` sees `discovery.json` and renders FSx / VPC peering / Route53 claims.
+After the first successful discovery Job on the hub, **refresh or re-sync** the `crossplane-aws-infra` and **`dr-dns-reconciler`** Argo CD Applications (if you use the latter). With **`crossplaneBootstrap.argocd`** patching enabled on the hub (default in **`values-hub.yaml`**), the CronJob sets **`netappDrDiscoveryJson`** on those Applications automatically. If patching is off, FSx / peering / Route53 manifests may not render in Argo until you set that parameter yourself or use break-glass **`make crossplane-setup`**.
 
 For Route53 / zone discovery, ensure AWS credentials are configured as described in `ansible/crossplane-vars.yml` and playbook comments.
 
