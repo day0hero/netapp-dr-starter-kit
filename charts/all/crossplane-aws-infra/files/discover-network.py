@@ -293,8 +293,13 @@ _DISCOVERY_PARENT_HELM_PARAM_SOURCE_INDEX_CAP = 20
 def _discovery_parent_json_pointers() -> List[str]:
     n = _DISCOVERY_PARENT_HELM_PARAM_SOURCE_INDEX_CAP
     ptrs: List[str] = (
-        ["/spec/source/helm/parameters", "/spec/source/helm/ignoreMissingValueFiles"]
+        [
+            "/spec/source/helm/parameters",
+            "/spec/source/helm/valueFiles",
+            "/spec/source/helm/ignoreMissingValueFiles",
+        ]
         + [f"/spec/sources/{i}/helm/parameters" for i in range(n)]
+        + [f"/spec/sources/{i}/helm/valueFiles" for i in range(n)]
         + [f"/spec/sources/{i}/helm/ignoreMissingValueFiles" for i in range(n)]
     )
     ptrs += [
@@ -313,12 +318,18 @@ def _stable_sorted_unique_pointers(ptrs: List[str]) -> List[str]:
 
 def _discovery_parent_ignore_entries() -> List[Dict[str, Any]]:
     ptrs = _discovery_parent_json_pointers()
+    # jqPathExpressions are reliable here (Argo diff normalizer); use for annotation keys that
+    # are awkward in RFC6901 pointers (and for last-applied-configuration from kubectl apply).
+    jqs = [
+        '.metadata.annotations["kubectl.kubernetes.io/last-applied-configuration"]',
+    ]
     return [
         {
             "group": "argoproj.io",
             "kind": "Application",
             "name": n,
             "jsonPointers": list(ptrs),
+            "jqPathExpressions": list(jqs),
         }
         for n in sorted(DISCOVERY_MANAGED_CHILD_APP_NAMES)
     ]
@@ -446,9 +457,35 @@ def find_application_by_path_substring(namespace: str, substr: str) -> Optional[
     return names[0]
 
 
+def _remove_kubectl_last_applied_annotation(namespace: str, name: str) -> None:
+    """Drop kubectl client annotation that Git/Helm does not render; it breaks Argo sync patches."""
+    r = subprocess.run(
+        [
+            "oc",
+            "annotate",
+            "application.argoproj.io",
+            name,
+            "-n",
+            namespace,
+            "kubectl.kubernetes.io/last-applied-configuration-",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0 and "not found" not in (r.stderr or "").lower():
+        print(
+            f"Note: kubectl last-applied annotation strip on {namespace}/{name}: {r.stderr or r.stdout}",
+            file=sys.stderr,
+        )
+
+
 def replace_argo_application(
     namespace: str, name: str, payload: Dict[str, Any], source_substring: str
 ) -> None:
+    """Update only Helm parameters (discovery B64); avoid full oc replace on Application CRs.
+
+    Full replace can confuse Argo CD sync (e.g. resourceVersion / patch apply errors on the hub).
+    """
     raw = subprocess.run(
         ["oc", "get", "application.argoproj.io", name, "-n", namespace, "-o", "json"],
         capture_output=True,
@@ -457,17 +494,92 @@ def replace_argo_application(
     ).stdout
     app = json.loads(raw)
     upsert_netapp_discovery_json_on_application(app, payload, source_substring)
-    _strip_application_for_server_replace(app)
-    path = ""
+    spec = app.get("spec") or {}
+    sources = spec.get("sources") or []
+    patch_path = ""
     try:
+        if sources:
+            ops: List[Dict[str, Any]] = []
+            for i, src in enumerate(sources):
+                helm = src.get("helm")
+                if not isinstance(helm, dict):
+                    continue
+                if source_substring not in _application_source_blob(src):
+                    continue
+                params = helm.get("parameters")
+                if params is None:
+                    continue
+                ops.append({"op": "replace", "path": f"/spec/sources/{i}/helm/parameters", "value": params})
+            if not ops:
+                print(
+                    f"Warning: no multisource helm.parameters patch ops for {namespace}/{name} "
+                    f"(substring {source_substring!r})",
+                    file=sys.stderr,
+                )
+                return
+            body = json.dumps(ops)
+            r = subprocess.run(
+                [
+                    "oc",
+                    "patch",
+                    "application.argoproj.io",
+                    name,
+                    "-n",
+                    namespace,
+                    "--type=json",
+                    "-p",
+                    body,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if r.returncode != 0:
+                print(
+                    f"json patch parameters failed for {namespace}/{name}: {r.stderr or r.stdout}",
+                    file=sys.stderr,
+                )
+                raise subprocess.CalledProcessError(r.returncode, r.args, output=r.stdout, stderr=r.stderr)
+            _remove_kubectl_last_applied_annotation(namespace, name)
+            return
+
+        # Single-source Application (common for VP-rendered child apps).
+        src = spec.get("source") or {}
+        helm = src.get("helm")
+        if not isinstance(helm, dict):
+            helm = {}
+        params = helm.get("parameters")
+        if params is None:
+            params = []
+        merge_body = {"spec": {"source": {"helm": {"parameters": params}}}}
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-            json.dump(app, f)
-            path = f.name
-        subprocess.run(["oc", "replace", "-f", path], check=True)
+            json.dump(merge_body, f)
+            patch_path = f.name
+        r = subprocess.run(
+            [
+                "oc",
+                "patch",
+                "application.argoproj.io",
+                name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "--patch-file",
+                patch_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            print(
+                f"merge patch parameters failed for {namespace}/{name}: {r.stderr or r.stdout}",
+                file=sys.stderr,
+            )
+            raise subprocess.CalledProcessError(r.returncode, r.args, output=r.stdout, stderr=r.stderr)
+        _remove_kubectl_last_applied_annotation(namespace, name)
     finally:
-        if path:
+        if patch_path:
             try:
-                os.unlink(path)
+                os.unlink(patch_path)
             except OSError:
                 pass
 
@@ -553,6 +665,7 @@ def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
                 idx = i
                 break
         want_ptrs = [str(x) for x in (want.get("jsonPointers") or [])]
+        want_jqs = [str(x) for x in (want.get("jqPathExpressions") or [])]
         if idx is None:
             out.append(dict(want))
             changed = True
@@ -563,8 +676,10 @@ def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
             del cur["namespace"]
             entry_changed = True
         if cur.get("jqPathExpressions"):
-            del cur["jqPathExpressions"]
-            entry_changed = True
+            legacy = any("netappDrDiscoveryJson" in str(j) for j in (cur.get("jqPathExpressions") or []))
+            if legacy:
+                del cur["jqPathExpressions"]
+                entry_changed = True
         cur_ptrs = [str(x) for x in (cur.get("jsonPointers") or [])]
         merged = list(cur_ptrs)
         for p in want_ptrs:
@@ -575,6 +690,11 @@ def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
         if merged_norm != cur_norm:
             cur["jsonPointers"] = merged_norm
             entry_changed = True
+        if want_jqs:
+            cur_jqs = [str(x) for x in (cur.get("jqPathExpressions") or [])]
+            if sorted(cur_jqs) != sorted(want_jqs):
+                cur["jqPathExpressions"] = list(want_jqs)
+                entry_changed = True
         if entry_changed:
             out[idx] = cur
             changed = True
