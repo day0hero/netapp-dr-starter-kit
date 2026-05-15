@@ -267,6 +267,13 @@ clusterGroup:
       namespace: crossplane-system
       argoProject: crossplane
       path: charts/all/crossplane-aws-infra
+      # Prune orphaned Crossplane claims when bucket name / discovery changes (e.g. trident-protect-bucket -> xrd-appvault-protect).
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        retry:
+          limit: 20
       ignoreDifferences:
         - group: route53.aws.upbound.io
           kind: Record
