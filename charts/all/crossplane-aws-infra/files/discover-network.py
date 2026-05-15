@@ -705,6 +705,21 @@ def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
     return True
 
 
+_RESPECT_IGNORE_DIFFERENCES_SYNC_OPTION = "RespectIgnoreDifferences=true"
+
+
+def _ensure_parent_respect_ignore_differences(app: dict) -> bool:
+    """Ensure hub Application syncPolicy includes RespectIgnoreDifferences (operator may strip it)."""
+    spec = app.setdefault("spec", {})
+    sp = spec.setdefault("syncPolicy", {})
+    opts = list(sp.get("syncOptions") or [])
+    if _RESPECT_IGNORE_DIFFERENCES_SYNC_OPTION in opts:
+        return False
+    opts.append(_RESPECT_IGNORE_DIFFERENCES_SYNC_OPTION)
+    sp["syncOptions"] = opts
+    return True
+
+
 def patch_parent_pattern_application_ignore_differences() -> None:
     if os.environ.get("PATCH_ARGOCD_PARENT_IGNORE_DIFFERENCES", "false").lower() != "true":
         return
@@ -735,14 +750,25 @@ def patch_parent_pattern_application_ignore_differences() -> None:
         )
         return
     app = json.loads(raw)
-    if not _merge_discovery_parent_ignore_differences(app):
+    idiff_changed = _merge_discovery_parent_ignore_differences(app)
+    syncopt_changed = _ensure_parent_respect_ignore_differences(app)
+    if not idiff_changed and not syncopt_changed:
         return
-    idiffs = app["spec"]["ignoreDifferences"]
-    patch_body = {"spec": {"ignoreDifferences": idiffs}}
-    print(
-        f"Patching Argo CD Application {ns}/{name} (ignoreDifferences jsonPointers on child Applications "
-        f"{', '.join(sorted(DISCOVERY_MANAGED_CHILD_APP_NAMES))})"
-    )
+    patch_spec: Dict[str, Any] = {}
+    if idiff_changed:
+        patch_spec["ignoreDifferences"] = app["spec"]["ignoreDifferences"]
+    if syncopt_changed:
+        patch_spec["syncPolicy"] = {"syncOptions": app["spec"]["syncPolicy"]["syncOptions"]}
+    patch_body = {"spec": patch_spec}
+    parts = []
+    if idiff_changed:
+        parts.append(
+            "ignoreDifferences (child Applications "
+            f"{', '.join(sorted(DISCOVERY_MANAGED_CHILD_APP_NAMES))})"
+        )
+    if syncopt_changed:
+        parts.append(f"syncPolicy.syncOptions ({_RESPECT_IGNORE_DIFFERENCES_SYNC_OPTION})")
+    print(f"Patching Argo CD Application {ns}/{name}: " + "; ".join(parts))
     patch_path = ""
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
