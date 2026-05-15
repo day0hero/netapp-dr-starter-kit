@@ -276,29 +276,32 @@ DISCOVERY_HELM_PARAM_B64 = "netappDrDiscoveryJsonB64"
 
 # Child Application specs patched with netappDrDiscoveryJson(B64) drift from Git; the hub
 # Pattern Application (app-of-apps) compares those CRs and shows OutOfSync unless we ignore
-# helm.parameters on the specific child Applications discovery mutates.
+# helm.parameters on the child Applications discovery mutates.
 #
-# We scope by metadata.name + namespace (Argo diff customization) and ignore whole
-# .spec.source.helm.parameters / per-source helm.parameters — fine-grained jq|select()
-# is unreliable across Argo CD versions for app-of-apps (see argoproj/argo-cd#19680).
-def _discovery_parent_ignore_entries(child_ns: str) -> List[Dict[str, Any]]:
-    if not child_ns:
-        return []
-    out: List[Dict[str, Any]] = []
-    for app_name in ("crossplane-aws-infra", "dr-dns-reconciler"):
-        out.append(
-            {
-                "group": "argoproj.io",
-                "kind": "Application",
-                "name": app_name,
-                "namespace": child_ns,
-                "jqPathExpressions": [
-                    ".spec.source.helm.parameters",
-                    '.spec.sources[] | select(.helm != null) | .helm.parameters',
-                ],
-            }
-        )
-    return out
+# Argo CD implements jqPathExpressions as del(<expr>) (see argo-cd util/argo/normalizers/diff_normalizer.go);
+# pipeline jq often fails or no-ops, and failures are skipped — so we use jsonPointers only.
+# Omit namespace on ignore rules so Argo matches any namespace (patch.GetNamespace() == "").
+# jsonPointers cover single-source and multisource (indices 0..N-1) helm.parameters on each child.
+DISCOVERY_MANAGED_CHILD_APP_NAMES = frozenset({"crossplane-aws-infra", "dr-dns-reconciler"})
+
+
+# Cover enough multisource indices for Helm parameters on child Applications (VP + OCI extras).
+_DISCOVERY_PARENT_HELM_PARAM_SOURCE_INDEX_CAP = 20
+
+
+def _discovery_parent_ignore_entries() -> List[Dict[str, Any]]:
+    ptrs = ["/spec/source/helm/parameters"] + [
+        f"/spec/sources/{i}/helm/parameters" for i in range(_DISCOVERY_PARENT_HELM_PARAM_SOURCE_INDEX_CAP)
+    ]
+    return [
+        {
+            "group": "argoproj.io",
+            "kind": "Application",
+            "name": n,
+            "jsonPointers": list(ptrs),
+        }
+        for n in sorted(DISCOVERY_MANAGED_CHILD_APP_NAMES)
+    ]
 
 
 def _strip_discovery_helm_params(helm: dict) -> None:
@@ -428,11 +431,11 @@ def _ignore_entry_key(entry: Dict[str, Any]) -> tuple[str, str, str, str]:
     )
 
 
-def _merge_discovery_parent_ignore_differences(app: dict, child_ns: str) -> bool:
-    """Merge scoped ignoreDifferences rules onto the hub Pattern (app-of-apps) Application."""
+def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
+    """Merge ignoreDifferences rules onto the hub Pattern (app-of-apps) Application."""
     spec = app.setdefault("spec", {})
     raw_existing: List[Any] = list(spec.get("ignoreDifferences") or [])
-    wants = _discovery_parent_ignore_entries(child_ns)
+    wants = _discovery_parent_ignore_entries()
     if not wants:
         return False
 
@@ -451,30 +454,45 @@ def _merge_discovery_parent_ignore_differences(app: dict, child_ns: str) -> bool
             jqs = entry.get("jqPathExpressions") or []
             if any("netappDrDiscoveryJson" in str(j) for j in jqs):
                 continue
+        # Replace any prior discovery-managed child rule (name match; any namespace / jq / json mix).
+        if (
+            entry.get("group") == "argoproj.io"
+            and entry.get("kind") == "Application"
+            and (entry.get("name") or "") in DISCOVERY_MANAGED_CHILD_APP_NAMES
+        ):
+            continue
         out.append(entry)
 
     changed = bool(len(out) != len(raw_existing))
     for want in wants:
         key = _ignore_entry_key(want)
-        want_jq = [str(x) for x in (want.get("jqPathExpressions") or [])]
         idx: Optional[int] = None
         for i, e in enumerate(out):
             if isinstance(e, dict) and _ignore_entry_key(e) == key:
                 idx = i
                 break
+        want_ptrs = [str(x) for x in (want.get("jsonPointers") or [])]
         if idx is None:
             out.append(dict(want))
             changed = True
             continue
-        cur = out[idx]
-        cur_jq = [str(x) for x in (cur.get("jqPathExpressions") or [])]
-        merged = list(cur_jq)
-        for expr in want_jq:
-            if expr not in merged:
-                merged.append(expr)
-        if merged != cur_jq:
-            cur = dict(cur)
-            cur["jqPathExpressions"] = merged
+        cur = dict(out[idx])
+        entry_changed = False
+        if cur.get("namespace"):
+            del cur["namespace"]
+            entry_changed = True
+        if cur.get("jqPathExpressions"):
+            del cur["jqPathExpressions"]
+            entry_changed = True
+        cur_ptrs = [str(x) for x in (cur.get("jsonPointers") or [])]
+        merged = list(cur_ptrs)
+        for p in want_ptrs:
+            if p not in merged:
+                merged.append(p)
+        if merged != cur_ptrs:
+            cur["jsonPointers"] = merged
+            entry_changed = True
+        if entry_changed:
             out[idx] = cur
             changed = True
 
@@ -514,18 +532,12 @@ def patch_parent_pattern_application_ignore_differences() -> None:
         )
         return
     app = json.loads(raw)
-    child_ns = os.environ.get("ARGOCD_CHILD_APPLICATION_NAMESPACE", "").strip()
-    if not child_ns:
-        child_ns = os.environ.get("ARGOCD_APPLICATION_NAMESPACE", "").strip()
-    if not child_ns:
-        print(
-            "Skipping parent ignoreDifferences patch: ARGOCD_APPLICATION_NAMESPACE is empty",
-            file=sys.stderr,
-        )
+    if not _merge_discovery_parent_ignore_differences(app):
         return
-    if not _merge_discovery_parent_ignore_differences(app, child_ns):
-        return
-    print(f"Patching Argo CD Application {ns}/{name} (ignoreDifferences for discovery helm parameters on child Applications)")
+    print(
+        f"Patching Argo CD Application {ns}/{name} (ignoreDifferences jsonPointers on child Applications "
+        f"{', '.join(sorted(DISCOVERY_MANAGED_CHILD_APP_NAMES))})"
+    )
     path = ""
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
