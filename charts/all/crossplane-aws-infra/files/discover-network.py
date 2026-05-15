@@ -276,15 +276,29 @@ DISCOVERY_HELM_PARAM_B64 = "netappDrDiscoveryJsonB64"
 
 # Child Application specs patched with netappDrDiscoveryJson(B64) drift from Git; the hub
 # Pattern Application (app-of-apps) compares those CRs and shows OutOfSync unless we ignore
-# those helm.parameters entries on all managed Application resources.
-DISCOVERY_PARENT_IGNORE_DIFFERENCES_ENTRY: Dict[str, Any] = {
-    "group": "argoproj.io",
-    "kind": "Application",
-    "jqPathExpressions": [
-        '.spec.source.helm.parameters[]? | select(.name == "netappDrDiscoveryJsonB64" or .name == "netappDrDiscoveryJson")',
-        '.spec.sources[]?.helm.parameters[]? | select(.name == "netappDrDiscoveryJsonB64" or .name == "netappDrDiscoveryJson")',
-    ],
-}
+# helm.parameters on the specific child Applications discovery mutates.
+#
+# We scope by metadata.name + namespace (Argo diff customization) and ignore whole
+# .spec.source.helm.parameters / per-source helm.parameters — fine-grained jq|select()
+# is unreliable across Argo CD versions for app-of-apps (see argoproj/argo-cd#19680).
+def _discovery_parent_ignore_entries(child_ns: str) -> List[Dict[str, Any]]:
+    if not child_ns:
+        return []
+    out: List[Dict[str, Any]] = []
+    for app_name in ("crossplane-aws-infra", "dr-dns-reconciler"):
+        out.append(
+            {
+                "group": "argoproj.io",
+                "kind": "Application",
+                "name": app_name,
+                "namespace": child_ns,
+                "jqPathExpressions": [
+                    ".spec.source.helm.parameters",
+                    '.spec.sources[] | select(.helm != null) | .helm.parameters',
+                ],
+            }
+        )
+    return out
 
 
 def _strip_discovery_helm_params(helm: dict) -> None:
@@ -405,35 +419,68 @@ def patch_argo_applications_for_hub(payload: Dict[str, Any]) -> None:
         do_patch(dr_ns, dr_name)
 
 
-def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
-    """Ensure spec.ignoreDifferences ignores discovery helm parameters on child Applications."""
-    spec = app.setdefault("spec", {})
-    existing: List[Any] = list(spec.get("ignoreDifferences") or [])
-    want = DISCOVERY_PARENT_IGNORE_DIFFERENCES_ENTRY
-    want_group = want.get("group")
-    want_kind = want.get("kind")
-    want_jq = [str(x) for x in (want.get("jqPathExpressions") or [])]
+def _ignore_entry_key(entry: Dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(entry.get("group") or ""),
+        str(entry.get("kind") or ""),
+        str(entry.get("name") or ""),
+        str(entry.get("namespace") or ""),
+    )
 
-    for entry in existing:
+
+def _merge_discovery_parent_ignore_differences(app: dict, child_ns: str) -> bool:
+    """Merge scoped ignoreDifferences rules onto the hub Pattern (app-of-apps) Application."""
+    spec = app.setdefault("spec", {})
+    raw_existing: List[Any] = list(spec.get("ignoreDifferences") or [])
+    wants = _discovery_parent_ignore_entries(child_ns)
+    if not wants:
+        return False
+
+    out: List[Any] = []
+    # Drop legacy unscoped rule from earlier chart versions (jq select on parameters).
+    for entry in raw_existing:
         if not isinstance(entry, dict):
+            out.append(entry)
             continue
-        if entry.get("group") != want_group or entry.get("kind") != want_kind:
+        if (
+            entry.get("group") == "argoproj.io"
+            and entry.get("kind") == "Application"
+            and not (entry.get("name") or "").strip()
+            and not (entry.get("namespace") or "").strip()
+        ):
+            jqs = entry.get("jqPathExpressions") or []
+            if any("netappDrDiscoveryJson" in str(j) for j in jqs):
+                continue
+        out.append(entry)
+
+    changed = bool(len(out) != len(raw_existing))
+    for want in wants:
+        key = _ignore_entry_key(want)
+        want_jq = [str(x) for x in (want.get("jqPathExpressions") or [])]
+        idx: Optional[int] = None
+        for i, e in enumerate(out):
+            if isinstance(e, dict) and _ignore_entry_key(e) == key:
+                idx = i
+                break
+        if idx is None:
+            out.append(dict(want))
+            changed = True
             continue
-        cur = [str(x) for x in (entry.get("jqPathExpressions") or [])]
-        merged = list(cur)
-        changed = False
+        cur = out[idx]
+        cur_jq = [str(x) for x in (cur.get("jqPathExpressions") or [])]
+        merged = list(cur_jq)
         for expr in want_jq:
             if expr not in merged:
                 merged.append(expr)
-                changed = True
-        if changed:
-            entry["jqPathExpressions"] = merged
-            return True
-        return False
+        if merged != cur_jq:
+            cur = dict(cur)
+            cur["jqPathExpressions"] = merged
+            out[idx] = cur
+            changed = True
 
-    new_list = list(existing)
-    new_list.append(dict(want))
-    spec["ignoreDifferences"] = new_list
+    if not changed:
+        return False
+    spec["ignoreDifferences"] = out
     return True
 
 
@@ -467,7 +514,16 @@ def patch_parent_pattern_application_ignore_differences() -> None:
         )
         return
     app = json.loads(raw)
-    if not _merge_discovery_parent_ignore_differences(app):
+    child_ns = os.environ.get("ARGOCD_CHILD_APPLICATION_NAMESPACE", "").strip()
+    if not child_ns:
+        child_ns = os.environ.get("ARGOCD_APPLICATION_NAMESPACE", "").strip()
+    if not child_ns:
+        print(
+            "Skipping parent ignoreDifferences patch: ARGOCD_APPLICATION_NAMESPACE is empty",
+            file=sys.stderr,
+        )
+        return
+    if not _merge_discovery_parent_ignore_differences(app, child_ns):
         return
     print(f"Patching Argo CD Application {ns}/{name} (ignoreDifferences for discovery helm parameters on child Applications)")
     path = ""

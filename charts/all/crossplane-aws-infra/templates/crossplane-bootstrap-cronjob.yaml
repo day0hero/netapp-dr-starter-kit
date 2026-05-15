@@ -78,6 +78,8 @@ spec:
                   value: {{ $p2.enabled | default false | toString | quote }}
                 - name: ARGOCD_APPLICATION_NAMESPACE
                   value: {{ $argoNs | quote }}
+                - name: ARGOCD_CHILD_APPLICATION_NAMESPACE
+                  value: {{ $argoNs | quote }}
                 - name: ARGOCD_APPLICATION_NAME
                   value: {{ $p1.applicationName | default "" | quote }}
                 - name: PATCH_ARGOCD_AUTO
