@@ -300,8 +300,15 @@ def _discovery_parent_json_pointers() -> List[str]:
     ptrs += [
         "/metadata/annotations/argocd.argoproj.io~1tracking-id",
         "/metadata/annotations/argocd.argoproj.io~1refresh",
+        "/metadata/annotations/argocd.argoproj.io~1instance",
+        "/metadata/annotations/notified.notifications.argoproj.io~1notified-on",
+        "/metadata/labels/app.kubernetes.io~1instance",
     ]
-    return ptrs
+    return sorted(dict.fromkeys(ptrs))
+
+
+def _stable_sorted_unique_pointers(ptrs: List[str]) -> List[str]:
+    return sorted(dict.fromkeys(str(p) for p in ptrs if p))
 
 
 def _discovery_parent_ignore_entries() -> List[Dict[str, Any]]:
@@ -315,6 +322,14 @@ def _discovery_parent_ignore_entries() -> List[Dict[str, Any]]:
         }
         for n in sorted(DISCOVERY_MANAGED_CHILD_APP_NAMES)
     ]
+
+
+def _strip_application_for_server_replace(app: dict) -> None:
+    """Drop read-only / noisy fields so oc replace is less likely to fight the apiserver."""
+    app.pop("status", None)
+    md = app.get("metadata")
+    if isinstance(md, dict) and "managedFields" in md:
+        del md["managedFields"]
 
 
 def _strip_discovery_helm_params(helm: dict) -> None:
@@ -442,6 +457,7 @@ def replace_argo_application(
     ).stdout
     app = json.loads(raw)
     upsert_netapp_discovery_json_on_application(app, payload, source_substring)
+    _strip_application_for_server_replace(app)
     path = ""
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
@@ -554,8 +570,10 @@ def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
         for p in want_ptrs:
             if p not in merged:
                 merged.append(p)
-        if merged != cur_ptrs:
-            cur["jsonPointers"] = merged
+        merged_norm = _stable_sorted_unique_pointers(merged)
+        cur_norm = _stable_sorted_unique_pointers(cur_ptrs)
+        if merged_norm != cur_norm:
+            cur["jsonPointers"] = merged_norm
             entry_changed = True
         if entry_changed:
             out[idx] = cur
@@ -599,20 +617,54 @@ def patch_parent_pattern_application_ignore_differences() -> None:
     app = json.loads(raw)
     if not _merge_discovery_parent_ignore_differences(app):
         return
+    idiffs = app["spec"]["ignoreDifferences"]
+    patch_body = {"spec": {"ignoreDifferences": idiffs}}
     print(
         f"Patching Argo CD Application {ns}/{name} (ignoreDifferences jsonPointers on child Applications "
         f"{', '.join(sorted(DISCOVERY_MANAGED_CHILD_APP_NAMES))})"
     )
-    path = ""
+    patch_path = ""
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-            json.dump(app, f)
-            path = f.name
-        subprocess.run(["oc", "replace", "-f", path], check=True)
-    finally:
-        if path:
+            json.dump(patch_body, f)
+            patch_path = f.name
+        r = subprocess.run(
+            [
+                "oc",
+                "patch",
+                "application.argoproj.io",
+                name,
+                "-n",
+                ns,
+                "--type=merge",
+                "--patch-file",
+                patch_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            print(
+                f"merge patch ignoreDifferences failed ({r.stderr or r.stdout}); falling back to oc replace: {r}",
+                file=sys.stderr,
+            )
+            _strip_application_for_server_replace(app)
+            rep_path = ""
             try:
-                os.unlink(path)
+                with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as rf:
+                    json.dump(app, rf)
+                    rep_path = rf.name
+                subprocess.run(["oc", "replace", "-f", rep_path], check=True)
+            finally:
+                if rep_path:
+                    try:
+                        os.unlink(rep_path)
+                    except OSError:
+                        pass
+    finally:
+        if patch_path:
+            try:
+                os.unlink(patch_path)
             except OSError:
                 pass
 
