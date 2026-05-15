@@ -275,6 +275,12 @@ clusterGroup:
         retry:
           limit: 20
       ignoreDifferences:
+        - group: argoproj.io
+          kind: Application
+          jqPathExpressions:
+            - .metadata.generation
+            - .metadata.uid
+            - .metadata.resourceVersion
         - group: route53.aws.upbound.io
           kind: Record
           jqPathExpressions:
