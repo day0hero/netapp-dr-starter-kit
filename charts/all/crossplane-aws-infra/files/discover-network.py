@@ -323,20 +323,70 @@ def _append_discovery_param_b64(helm: dict, b64_value: str) -> None:
     )
 
 
-def upsert_netapp_discovery_json_on_application(app: dict, payload: Dict[str, Any]) -> None:
+def _application_source_blob(src: dict) -> str:
+    return (src.get("path") or "") + (src.get("chart") or "") + (src.get("repoURL") or "")
+
+
+def upsert_netapp_discovery_json_on_application(
+    app: dict, payload: Dict[str, Any], source_substring: str
+) -> None:
+    """Inject netappDrDiscoveryJsonB64 on the Helm source that actually renders this chart.
+
+    Multisource hub Applications include a ref-only source; it may carry an empty `helm: {}`.
+    Writing discovery parameters onto that source breaks Helm / Argo and can mark the app Degraded.
+    """
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     b64_val = base64.b64encode(raw).decode("ascii")
     spec = app.setdefault("spec", {})
     sources = spec.get("sources")
     if sources:
+        patched = 0
         for src in sources:
             helm = src.get("helm")
-            if helm is not None:
+            if not isinstance(helm, dict):
+                continue
+            blob = _application_source_blob(src)
+            if source_substring not in blob:
+                continue
+            _strip_discovery_helm_params(helm)
+            _append_discovery_param_b64(helm, b64_val)
+            patched += 1
+        if patched == 0:
+            # Fallback: first chart-like source (has path or chart), excluding ref-only rows.
+            for src in sources:
+                helm = src.get("helm")
+                if not isinstance(helm, dict):
+                    continue
+                if not (src.get("path") or src.get("chart")):
+                    continue
+                print(
+                    f"Warning: discovery param applied via fallback (no '{source_substring}' in source blob) "
+                    f"on Application {(app.get('metadata') or {}).get('name')!r}",
+                    file=sys.stderr,
+                )
                 _strip_discovery_helm_params(helm)
                 _append_discovery_param_b64(helm, b64_val)
+                patched += 1
+                break
+        if patched == 0:
+            print(
+                f"Warning: no Helm source patched for discovery on Application "
+                f"{(app.get('metadata') or {}).get('name')!r} (substring {source_substring!r})",
+                file=sys.stderr,
+            )
         return
     src = spec.setdefault("source", {})
+    blob = _application_source_blob(src)
+    if source_substring not in blob:
+        print(
+            f"Warning: discovery substring {source_substring!r} not in single-source blob {blob!r} "
+            f"for Application {(app.get('metadata') or {}).get('name')!r}",
+            file=sys.stderr,
+        )
     helm = src.setdefault("helm", {})
+    if not isinstance(helm, dict):
+        src["helm"] = {}
+        helm = src["helm"]
     _strip_discovery_helm_params(helm)
     _append_discovery_param_b64(helm, b64_val)
 
@@ -358,7 +408,7 @@ def find_application_by_path_substring(namespace: str, substr: str) -> Optional[
         for s in spec.get("sources") or []:
             candidates.append(s)
         for src in candidates:
-            blob = (src.get("path") or "") + (src.get("chart") or "") + (src.get("repoURL") or "")
+            blob = _application_source_blob(src)
             if substr in blob:
                 names.append(item["metadata"]["name"])
                 break
@@ -368,7 +418,9 @@ def find_application_by_path_substring(namespace: str, substr: str) -> Optional[
     return names[0]
 
 
-def replace_argo_application(namespace: str, name: str, payload: Dict[str, Any]) -> None:
+def replace_argo_application(
+    namespace: str, name: str, payload: Dict[str, Any], source_substring: str
+) -> None:
     raw = subprocess.run(
         ["oc", "get", "application.argoproj.io", name, "-n", namespace, "-o", "json"],
         capture_output=True,
@@ -376,7 +428,7 @@ def replace_argo_application(namespace: str, name: str, payload: Dict[str, Any])
         check=True,
     ).stdout
     app = json.loads(raw)
-    upsert_netapp_discovery_json_on_application(app, payload)
+    upsert_netapp_discovery_json_on_application(app, payload, source_substring)
     path = ""
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
@@ -409,17 +461,17 @@ def patch_argo_applications_for_hub(payload: Dict[str, Any]) -> None:
 
     done: set[tuple[str, str]] = set()
 
-    def do_patch(ns: str, name: str) -> None:
+    def do_patch(ns: str, name: str, source_substring: str) -> None:
         if not ns or not name or (ns, name) in done:
             return
         print(f"Patching Argo CD Application {ns}/{name} ({DISCOVERY_HELM_PARAM_B64})")
-        replace_argo_application(ns, name, payload)
+        replace_argo_application(ns, name, payload, source_substring)
         done.add((ns, name))
 
     if patch_cp:
-        do_patch(argo_ns, argo_name)
+        do_patch(argo_ns, argo_name, "crossplane-aws-infra")
     if patch_dr:
-        do_patch(dr_ns, dr_name)
+        do_patch(dr_ns, dr_name, "dr-dns-reconciler")
 
 
 def _ignore_entry_key(entry: Dict[str, Any]) -> tuple[str, str, str, str]:
