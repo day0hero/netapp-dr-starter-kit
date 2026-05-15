@@ -281,18 +281,31 @@ DISCOVERY_HELM_PARAM_B64 = "netappDrDiscoveryJsonB64"
 # Argo CD implements jqPathExpressions as del(<expr>) (see argo-cd util/argo/normalizers/diff_normalizer.go);
 # pipeline jq often fails or no-ops, and failures are skipped — so we use jsonPointers only.
 # Omit namespace on ignore rules so Argo matches any namespace (patch.GetNamespace() == "").
-# jsonPointers cover single-source and multisource (indices 0..N-1) helm.parameters on each child.
+# jsonPointers: discovery-injected helm.parameters; Argo-mutated helm.ignoreMissingValueFiles; and
+# common Argo annotations on child Application CRs (~1 is RFC 6901 encoding for "/" in keys).
 DISCOVERY_MANAGED_CHILD_APP_NAMES = frozenset({"crossplane-aws-infra", "dr-dns-reconciler"})
 
 
-# Cover enough multisource indices for Helm parameters on child Applications (VP + OCI extras).
+# Cover enough multisource indices for Helm blocks on child Applications (VP + OCI extras).
 _DISCOVERY_PARENT_HELM_PARAM_SOURCE_INDEX_CAP = 20
 
 
-def _discovery_parent_ignore_entries() -> List[Dict[str, Any]]:
-    ptrs = ["/spec/source/helm/parameters"] + [
-        f"/spec/sources/{i}/helm/parameters" for i in range(_DISCOVERY_PARENT_HELM_PARAM_SOURCE_INDEX_CAP)
+def _discovery_parent_json_pointers() -> List[str]:
+    n = _DISCOVERY_PARENT_HELM_PARAM_SOURCE_INDEX_CAP
+    ptrs: List[str] = (
+        ["/spec/source/helm/parameters", "/spec/source/helm/ignoreMissingValueFiles"]
+        + [f"/spec/sources/{i}/helm/parameters" for i in range(n)]
+        + [f"/spec/sources/{i}/helm/ignoreMissingValueFiles" for i in range(n)]
+    )
+    ptrs += [
+        "/metadata/annotations/argocd.argoproj.io~1tracking-id",
+        "/metadata/annotations/argocd.argoproj.io~1refresh",
     ]
+    return ptrs
+
+
+def _discovery_parent_ignore_entries() -> List[Dict[str, Any]]:
+    ptrs = _discovery_parent_json_pointers()
     return [
         {
             "group": "argoproj.io",
