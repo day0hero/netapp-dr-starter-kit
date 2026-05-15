@@ -274,6 +274,18 @@ def apply_configmap(namespace: str, name: str, data: Dict[str, str]) -> None:
 DISCOVERY_HELM_PARAM_LEGACY = "netappDrDiscoveryJson"
 DISCOVERY_HELM_PARAM_B64 = "netappDrDiscoveryJsonB64"
 
+# Child Application specs patched with netappDrDiscoveryJson(B64) drift from Git; the hub
+# Pattern Application (app-of-apps) compares those CRs and shows OutOfSync unless we ignore
+# those helm.parameters entries on all managed Application resources.
+DISCOVERY_PARENT_IGNORE_DIFFERENCES_ENTRY: Dict[str, Any] = {
+    "group": "argoproj.io",
+    "kind": "Application",
+    "jqPathExpressions": [
+        '.spec.source.helm.parameters[]? | select(.name == "netappDrDiscoveryJsonB64" or .name == "netappDrDiscoveryJson")',
+        '.spec.sources[]?.helm.parameters[]? | select(.name == "netappDrDiscoveryJsonB64" or .name == "netappDrDiscoveryJson")',
+    ],
+}
+
 
 def _strip_discovery_helm_params(helm: dict) -> None:
     params = helm.get("parameters")
@@ -391,6 +403,85 @@ def patch_argo_applications_for_hub(payload: Dict[str, Any]) -> None:
         do_patch(argo_ns, argo_name)
     if patch_dr:
         do_patch(dr_ns, dr_name)
+
+
+def _merge_discovery_parent_ignore_differences(app: dict) -> bool:
+    """Ensure spec.ignoreDifferences ignores discovery helm parameters on child Applications."""
+    spec = app.setdefault("spec", {})
+    existing: List[Any] = list(spec.get("ignoreDifferences") or [])
+    want = DISCOVERY_PARENT_IGNORE_DIFFERENCES_ENTRY
+    want_group = want.get("group")
+    want_kind = want.get("kind")
+    want_jq = [str(x) for x in (want.get("jqPathExpressions") or [])]
+
+    for entry in existing:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("group") != want_group or entry.get("kind") != want_kind:
+            continue
+        cur = [str(x) for x in (entry.get("jqPathExpressions") or [])]
+        merged = list(cur)
+        changed = False
+        for expr in want_jq:
+            if expr not in merged:
+                merged.append(expr)
+                changed = True
+        if changed:
+            entry["jqPathExpressions"] = merged
+            return True
+        return False
+
+    new_list = list(existing)
+    new_list.append(dict(want))
+    spec["ignoreDifferences"] = new_list
+    return True
+
+
+def patch_parent_pattern_application_ignore_differences() -> None:
+    if os.environ.get("PATCH_ARGOCD_PARENT_IGNORE_DIFFERENCES", "false").lower() != "true":
+        return
+    ns = os.environ.get("ARGOCD_PARENT_APPLICATION_NAMESPACE", "").strip() or "vp-gitops"
+    name = os.environ.get("ARGOCD_PARENT_APPLICATION_NAME", "").strip()
+    if not name:
+        pattern = os.environ.get("GLOBAL_PATTERN", "").strip()
+        cg = os.environ.get("CLUSTER_GROUP_NAME", "").strip()
+        if pattern and cg:
+            name = f"{pattern}-{cg}"
+    if not name:
+        print(
+            "Skipping parent Application ignoreDifferences patch: set ARGOCD_PARENT_APPLICATION_NAME or GLOBAL_PATTERN+CLUSTER_GROUP_NAME",
+            file=sys.stderr,
+        )
+        return
+    try:
+        raw = subprocess.run(
+            ["oc", "get", "application.argoproj.io", name, "-n", ns, "-o", "json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except subprocess.CalledProcessError as e:
+        print(
+            f"Skipping parent ignoreDifferences patch ({ns}/{name}): {e.stderr or e}",
+            file=sys.stderr,
+        )
+        return
+    app = json.loads(raw)
+    if not _merge_discovery_parent_ignore_differences(app):
+        return
+    print(f"Patching Argo CD Application {ns}/{name} (ignoreDifferences for discovery helm parameters on child Applications)")
+    path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(app, f)
+            path = f.name
+        subprocess.run(["oc", "replace", "-f", path], check=True)
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def main() -> int:
@@ -549,6 +640,7 @@ def main() -> int:
     apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
     print("hub discovery written")
     patch_argo_applications_for_hub(out)
+    patch_parent_pattern_application_ignore_differences()
     return 0
 
 

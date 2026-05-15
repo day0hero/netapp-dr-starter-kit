@@ -88,6 +88,16 @@ spec:
                   value: {{ $p2.applicationName | default "" | quote }}
                 - name: PATCH_ARGOCD_DR_DNS_AUTO
                   value: {{ $p2.autoDiscover | default true | toString | quote }}
+                - name: GLOBAL_PATTERN
+                  value: {{ .Values.global.pattern | quote }}
+                - name: CLUSTER_GROUP_NAME
+                  value: {{ .Values.clusterGroup.name | default "hub" | quote }}
+                - name: PATCH_ARGOCD_PARENT_IGNORE_DIFFERENCES
+                  value: {{ ternary "true" "false" (and ($p1.enabled | default false) ($p1.parentIgnoreDifferences | default true)) | quote }}
+                - name: ARGOCD_PARENT_APPLICATION_NAMESPACE
+                  value: {{ ($p1.parentApplicationNamespace | default "vp-gitops") | quote }}
+                - name: ARGOCD_PARENT_APPLICATION_NAME
+                  value: {{ $p1.parentApplicationName | default "" | quote }}
               volumeMounts:
                 - name: scripts
                   mountPath: /scripts

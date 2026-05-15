@@ -205,6 +205,11 @@ crossplaneBootstrap:
       # Empty: use global.pattern + "-hub" (Validated Patterns) if global.pattern is set, else openshift-gitops.
       applicationNamespace: ""
       applicationName: ""
+      # Hub Pattern Application (app-of-apps) lives in vp-gitops by default; merge ignoreDifferences so
+      # discovery-injected helm parameters on child Applications do not mark the parent OutOfSync.
+      parentIgnoreDifferences: true
+      parentApplicationNamespace: vp-gitops
+      parentApplicationName: ""
     patchDrDnsApplication:
       enabled: false
       autoDiscover: true

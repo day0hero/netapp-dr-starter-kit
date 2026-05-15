@@ -20,6 +20,12 @@
 {{- if $p2.enabled }}
 {{- $rbacNs = append $rbacNs $drDnsNs }}
 {{- end }}
+{{- if and $p1.enabled ($p1.parentIgnoreDifferences | default true) }}
+{{- $parentArgoNs := $p1.parentApplicationNamespace | default "vp-gitops" }}
+{{- if $parentArgoNs }}
+{{- $rbacNs = append $rbacNs $parentArgoNs }}
+{{- end }}
+{{- end }}
 {{- $roleName := printf "%s-argocd-apps" .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- range ($rbacNs | uniq) }}
 ---

@@ -403,6 +403,11 @@ crossplaneBootstrap:
   argocd:
     patchApplication:
       enabled: true
+      # Merge ignoreDifferences onto the hub Pattern Application (e.g. vp-gitops/netapp-dr-starter-kit-hub)
+      # so app-of-apps sync ignores discovery-injected netappDrDiscoveryJsonB64 on child Application CRs.
+      parentIgnoreDifferences: true
+      parentApplicationNamespace: vp-gitops
+      parentApplicationName: ""
       autoDiscover: true
       applicationName: ""
     patchDrDnsApplication:
