@@ -12,6 +12,8 @@ apiVersion: ec2.aws.upbound.io/v1beta1
 kind: SecurityGroupRule
 metadata:
   name: {{ $sgName }}-{{ $rule.name }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
 spec:
   forProvider:
     region: {{ $inst.region }}
