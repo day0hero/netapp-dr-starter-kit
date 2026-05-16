@@ -274,14 +274,7 @@ clusterGroup:
           selfHeal: true
         retry:
           limit: 20
-        syncOptions:
-          - RespectIgnoreDifferences=true
       ignoreDifferences:
-        # Discovery patches netappDrDiscoveryJsonB64 on this Application; ignore so parent app-of-apps stays Synced.
-        - jsonPointers:
-            - /spec/source/helm/parameters
-        - jqPathExpressions:
-            - .spec.sources[]?.helm.parameters
         - group: route53.aws.upbound.io
           kind: Record
           jqPathExpressions:
@@ -300,18 +293,11 @@ clusterGroup:
       namespace: crossplane-system
       argoProject: crossplane
       path: charts/all/dr-dns-reconciler
-      ignoreDifferences:
-        - jsonPointers:
-            - /spec/source/helm/parameters
-        - jqPathExpressions:
-            - .spec.sources[]?.helm.parameters
       syncPolicy:
         automated:
           selfHeal: true
         retry:
           limit: 5
-        syncOptions:
-          - RespectIgnoreDifferences=true
     trident:
       name: trident
       namespace: trident
