@@ -274,6 +274,8 @@ clusterGroup:
           selfHeal: true
         retry:
           limit: 20
+        syncOptions:
+          - RespectIgnoreDifferences=true
       ignoreDifferences:
         - group: route53.aws.upbound.io
           kind: Record
