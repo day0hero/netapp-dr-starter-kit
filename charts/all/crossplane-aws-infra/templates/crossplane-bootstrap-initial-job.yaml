@@ -1,0 +1,26 @@
+{{- if and .Values.crossplaneBootstrap.enabled (.Values.crossplaneBootstrap.argoHooks.enabled | default true) (.Values.crossplaneBootstrap.argoHooks.initialJob | default true) }}
+{{- $b := .Values.crossplaneBootstrap }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crossplane-network-discovery-initial
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Sync hook (not PreSync): wave-0 SA/RBAC apply first; Argo waits for this Job before later waves.
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "crossplane-aws-infra.labels" . | nindent 8 }}
+    spec:
+      {{- include "crossplane-aws-infra.discoveryJobPodSpec" (dict "root" . "bootstrap" $b "discoveryHook" "" "triggerResync" "false") | nindent 6 }}
+{{- end }}

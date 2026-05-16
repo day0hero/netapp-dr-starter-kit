@@ -19,6 +19,8 @@ kind: CronJob
 metadata:
   name: crossplane-network-discovery
   namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:

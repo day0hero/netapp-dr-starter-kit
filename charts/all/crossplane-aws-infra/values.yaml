@@ -183,11 +183,11 @@ netappDrDiscoveryJsonB64: ""
 crossplaneBootstrap:
   enabled: true
   schedule: "*/5 * * * *"
-  # Argo CD PreSync runs discovery + patches netappDrDiscoveryJsonB64 before AWS claims sync.
+  # Sync hook (wave 1) runs discovery after wave-0 RBAC/SA; patches netappDrDiscoveryJsonB64.
   # PostSync queues a follow-up sync so Helm renders both FSx filesystems (first sync has no B64 yet).
   argoHooks:
     enabled: true
-    presync: true
+    initialJob: true
     postsync: true
   discoveryNamespace: ""
   discoveryConfigMapName: crossplane-network-discovery

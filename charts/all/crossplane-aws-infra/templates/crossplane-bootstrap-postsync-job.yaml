@@ -1,0 +1,25 @@
+{{- if and .Values.crossplaneBootstrap.enabled (.Values.crossplaneBootstrap.argoHooks.enabled | default true) (.Values.crossplaneBootstrap.argoHooks.postsync | default true) }}
+{{- $b := .Values.crossplaneBootstrap }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crossplane-network-discovery-postsync
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/sync-wave: "10"
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "crossplane-aws-infra.labels" . | nindent 8 }}
+    spec:
+      {{- include "crossplane-aws-infra.discoveryJobPodSpec" (dict "root" . "bootstrap" $b "discoveryHook" "postsync" "triggerResync" "true") | nindent 6 }}
+{{- end }}

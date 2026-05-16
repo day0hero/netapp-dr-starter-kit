@@ -4,6 +4,8 @@ kind: ConfigMap
 metadata:
   name: crossplane-bootstrap-scripts
   namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 data:

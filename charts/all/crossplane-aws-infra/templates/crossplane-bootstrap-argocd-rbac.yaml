@@ -34,6 +34,8 @@ kind: Role
 metadata:
   name: {{ $roleName }}
   namespace: {{ . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 rules:
@@ -46,6 +48,8 @@ kind: RoleBinding
 metadata:
   name: {{ $roleName }}
   namespace: {{ . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 roleRef:
