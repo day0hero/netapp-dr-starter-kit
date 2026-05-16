@@ -1,3 +1,4 @@
+{{- if include "crossplane-aws-infra.discoveryProvisionable" . | trim }}
 {{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
 {{- range $inst := $instances }}
 ---
@@ -5,6 +6,8 @@ apiVersion: fsx.aws.upbound.io/v1beta1
 kind: OntapStorageVirtualMachine
 metadata:
   name: {{ $inst.name }}-{{ $inst.svmName | lower }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "15"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
@@ -28,4 +31,5 @@ spec:
   writeConnectionSecretToRef:
     name: {{ $inst.name }}-{{ $inst.svmName | lower }}-conn
     namespace: crossplane-system
+{{- end }}
 {{- end }}

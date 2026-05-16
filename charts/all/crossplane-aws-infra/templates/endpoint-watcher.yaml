@@ -1,4 +1,4 @@
-{{- if and .Values.endpointWatcher.enabled (include "crossplane-aws-infra.endpointWatcherRenderable" . | trim) }}
+{{- if and .Values.endpointWatcher.enabled (include "crossplane-aws-infra.discoveryProvisionable" . | trim) (include "crossplane-aws-infra.endpointWatcherRenderable" . | trim) }}
 {{- $w := include "crossplane-aws-infra.mergedEndpointWatcher" . | fromJson }}
 apiVersion: batch/v1
 kind: CronJob

@@ -122,6 +122,28 @@ Priority: netappDrDiscoveryJson > netappDrDiscoveryJsonB64 > ConfigMap lookup (l
 {{- if and (ne ($w.local.fileSystemName | default "") "") (ne ($w.local.region | default "") "") (ne ($w.peer.fileSystemName | default "") "") (ne ($w.peer.region | default "") "") }}true{{- end }}
 {{- end }}
 
+{{/*
+True when Helm has discovery data (B64/inline param or completed ConfigMap merge).
+First Argo sync without netappDrDiscoveryJsonB64 renders no FSx/VPC/Route53 claims; the PreSync
+discovery hook patches the Application, PostSync triggers a second sync with both FSx filesystems.
+*/}}
+{{- define "crossplane-aws-infra.discoveryProvisionable" -}}
+{{- $b64 := .Values.netappDrDiscoveryJsonB64 | default "" | trim }}
+{{- if $b64 -}}
+true
+{{- else -}}
+{{- $inline := .Values.netappDrDiscoveryJson | default "" | trim }}
+{{- if $inline -}}
+true
+{{- else -}}
+{{- $disc := include "crossplane-aws-infra.discoveryDict" . | fromJson }}
+{{- if $disc._discoveryComplete -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "crossplane-aws-infra.fsxInstances" -}}
 {{- $fsx := include "crossplane-aws-infra.mergedFsxOntap" . | fromJson }}
 {{- $instances := list }}

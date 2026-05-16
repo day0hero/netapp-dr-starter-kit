@@ -1,4 +1,4 @@
-{{- if include "crossplane-aws-infra.route53Renderable" . | trim }}
+{{- if and (include "crossplane-aws-infra.discoveryProvisionable" . | trim) (include "crossplane-aws-infra.route53Renderable" . | trim) }}
 {{- $providerConfigRef := .Values.global.providerConfigRef }}
 {{- $r53 := include "crossplane-aws-infra.mergedRoute53Failover" . | fromJson }}
 {{- $g := include "crossplane-aws-infra.mergedGlobal" . | fromJson }}

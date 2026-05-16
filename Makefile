@@ -4,6 +4,10 @@
 
 include Makefile-common
 
+# Pattern install does not wait for in-cluster discovery; extend install so dual FSx CRs exist.
+.PHONY: install
+install: pattern-install wait-crossplane-bootstrap
+
 # =============================================================================
 # NetApp DR Starter Kit - Infrastructure Targets
 # =============================================================================
@@ -79,6 +83,14 @@ endef
 ##@ NetApp DR Infrastructure
 
 ##@ Crossplane Infrastructure
+
+.PHONY: wait-crossplane-bootstrap
+wait-crossplane-bootstrap: ## After install: wait for discovery ConfigMap and two OntapFileSystem CRs on the hub
+	$(call _validate_kubeconfigs,wait-crossplane-bootstrap)
+	@echo "Waiting for Crossplane network discovery and dual FSx CRs (hub cluster)..."
+	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/wait-crossplane-bootstrap.yaml \
+		-e prod_kubeconfig=$(_PROD_KUBECONFIG) \
+		-e dr_kubeconfig=$(_DR_KUBECONFIG)
 
 .PHONY: crossplane-setup
 crossplane-setup: ## Optional: discover clusters and write Crossplane values locally (break-glass; default is in-cluster discovery)

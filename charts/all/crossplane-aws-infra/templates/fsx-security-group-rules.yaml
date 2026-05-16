@@ -1,3 +1,4 @@
+{{- if include "crossplane-aws-infra.discoveryProvisionable" . | trim }}
 {{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
 {{- $rules := include "crossplane-aws-infra.sgRules" . | fromYamlArray }}
 {{- $providerConfigRef := .Values.global.providerConfigRef }}
@@ -54,4 +55,5 @@ spec:
   providerConfigRef:
     name: {{ $providerConfigRef }}
 
+{{- end }}
 {{- end }}

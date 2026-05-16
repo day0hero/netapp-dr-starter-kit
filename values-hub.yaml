@@ -393,6 +393,10 @@ clusterGroup:
 crossplaneBootstrap:
   enabled: true
   schedule: "*/5 * * * *"
+  argoHooks:
+    enabled: true
+    presync: true
+    postsync: true
   externalSecrets:
     drClusterKubeconfig: true
     primaryClusterKubeconfig: false

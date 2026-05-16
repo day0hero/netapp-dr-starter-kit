@@ -584,6 +584,175 @@ def replace_argo_application(
                 pass
 
 
+def refresh_argo_application(namespace: str, name: str) -> None:
+    """Ask Argo CD to re-render Helm with updated parameters (e.g. after discovery B64 patch)."""
+    if not namespace or not name:
+        return
+    r = subprocess.run(
+        [
+            "oc",
+            "annotate",
+            "application.argoproj.io",
+            name,
+            "-n",
+            namespace,
+            "argocd.argoproj.io/refresh=hard",
+            "--overwrite",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        print(
+            f"Warning: hard refresh on {namespace}/{name}: {r.stderr or r.stdout}",
+            file=sys.stderr,
+        )
+    else:
+        print(f"Hard refresh requested for Argo CD Application {namespace}/{name}")
+
+
+def request_argo_sync(namespace: str, name: str, *, prune: bool = False) -> None:
+    """Queue a sync on an Application (used after discovery injects helm parameters)."""
+    if not namespace or not name:
+        return
+    patch = {
+        "operation": {
+            "initiatedBy": {"username": "crossplane-network-discovery"},
+            "sync": {"prune": prune},
+        }
+    }
+    patch_path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(patch, f)
+            patch_path = f.name
+        r = subprocess.run(
+            [
+                "oc",
+                "patch",
+                "application.argoproj.io",
+                name,
+                "-n",
+                namespace,
+                "--type=merge",
+                "--patch-file",
+                patch_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            print(
+                f"Warning: sync request failed for {namespace}/{name}: {r.stderr or r.stdout}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Sync requested for Argo CD Application {namespace}/{name}")
+    finally:
+        if patch_path:
+            try:
+                os.unlink(patch_path)
+            except OSError:
+                pass
+
+
+def count_ontap_filesystems() -> int:
+    r = subprocess.run(
+        ["oc", "get", "ontapfilesystems.fsx.aws.upbound.io", "-o", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return 0
+    data = json.loads(r.stdout or "{}")
+    return len(data.get("items") or [])
+
+
+def application_has_discovery_b64(namespace: str, name: str) -> bool:
+    try:
+        raw = subprocess.run(
+            ["oc", "get", "application.argoproj.io", name, "-n", namespace, "-o", "json"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return False
+    app = json.loads(raw)
+    spec = app.get("spec") or {}
+    sources = spec.get("sources") or []
+    if not sources and spec.get("source"):
+        sources = [spec["source"]]
+    for src in sources:
+        helm = src.get("helm") or {}
+        for p in helm.get("parameters") or []:
+            if p.get("name") == DISCOVERY_HELM_PARAM_B64 and (p.get("value") or "").strip():
+                return True
+    return False
+
+
+def resolve_child_application(namespace: str, env_name: str, auto: bool, substring: str) -> str:
+    name = os.environ.get(env_name, "").strip()
+    if namespace and not name and auto:
+        name = find_application_by_path_substring(namespace, substring) or ""
+    return name
+
+
+def post_discovery_resync() -> None:
+    """After patching discovery B64, trigger refresh + follow-up sync so Helm renders both FSx filesystems."""
+    if os.environ.get("TRIGGER_ARGO_RESYNC", "true").lower() != "true":
+        return
+    argo_ns = os.environ.get("ARGOCD_APPLICATION_NAMESPACE", "").strip()
+    if not argo_ns and os.environ.get("GLOBAL_PATTERN", "").strip():
+        argo_ns = f"{os.environ.get('GLOBAL_PATTERN', '').strip()}-hub"
+    patch_cp = os.environ.get("PATCH_ARGOCD_CROSSPLANE_APP", "false").lower() == "true"
+    patch_dr = os.environ.get("PATCH_ARGOCD_DR_DNS_APP", "false").lower() == "true"
+    cp_auto = os.environ.get("PATCH_ARGOCD_AUTO", "false").lower() == "true"
+    dr_auto = os.environ.get("PATCH_ARGOCD_DR_DNS_AUTO", "false").lower() == "true"
+    cp_name = resolve_child_application(argo_ns, "ARGOCD_APPLICATION_NAME", cp_auto, "crossplane-aws-infra")
+    dr_ns = os.environ.get("ARGOCD_DR_DNS_APPLICATION_NAMESPACE", "").strip() or argo_ns
+    dr_name = resolve_child_application(dr_ns, "ARGOCD_DR_DNS_APPLICATION_NAME", dr_auto, "dr-dns-reconciler")
+
+    targets: List[tuple[str, str]] = []
+    if patch_cp and cp_name:
+        targets.append((argo_ns, cp_name))
+    if patch_dr and dr_name:
+        targets.append((dr_ns, dr_name))
+    for ns, name in targets:
+        refresh_argo_application(ns, name)
+        request_argo_sync(ns, name, prune=False)
+
+
+def postsync_hook_main() -> int:
+    """PostSync: if discovery B64 is set but fewer than two FSx CRs exist, queue another sync."""
+    role = os.environ.get("PATTERN_CLUSTER_ROLE", "hub").strip()
+    if role != "hub":
+        return 0
+    argo_ns = os.environ.get("ARGOCD_APPLICATION_NAMESPACE", "").strip()
+    if not argo_ns and os.environ.get("GLOBAL_PATTERN", "").strip():
+        argo_ns = f"{os.environ.get('GLOBAL_PATTERN', '').strip()}-hub"
+    cp_name = resolve_child_application(
+        argo_ns,
+        "ARGOCD_APPLICATION_NAME",
+        os.environ.get("PATCH_ARGOCD_AUTO", "true").lower() == "true",
+        "crossplane-aws-infra",
+    )
+    if not argo_ns or not cp_name:
+        print("PostSync: skip (no crossplane-aws-infra Application namespace/name)")
+        return 0
+    fsx_count = count_ontap_filesystems()
+    print(f"PostSync: OntapFileSystem count={fsx_count}")
+    if fsx_count >= 2:
+        return 0
+    if not application_has_discovery_b64(argo_ns, cp_name):
+        print("PostSync: discovery B64 not on Application yet; skipping resync")
+        return 0
+    print("PostSync: discovery present but FSx CRs < 2; requesting another sync")
+    refresh_argo_application(argo_ns, cp_name)
+    request_argo_sync(argo_ns, cp_name, prune=False)
+    return 0
+
+
 def patch_argo_applications_for_hub(payload: Dict[str, Any]) -> None:
     patch_cp = os.environ.get("PATCH_ARGOCD_CROSSPLANE_APP", "false").lower() == "true"
     patch_dr = os.environ.get("PATCH_ARGOCD_DR_DNS_APP", "false").lower() == "true"
@@ -972,11 +1141,15 @@ def main() -> int:
     print("hub discovery written")
     patch_argo_applications_for_hub(out)
     patch_parent_pattern_application_ignore_differences()
+    post_discovery_resync()
     return 0
 
 
 if __name__ == "__main__":
     try:
+        hook = os.environ.get("DISCOVERY_HOOK", "").strip().lower()
+        if hook == "postsync":
+            raise SystemExit(postsync_hook_main())
         raise SystemExit(main())
     except Exception as e:  # noqa: BLE001
         print(str(e), file=sys.stderr)

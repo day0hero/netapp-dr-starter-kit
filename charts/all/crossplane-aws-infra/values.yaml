@@ -183,6 +183,12 @@ netappDrDiscoveryJsonB64: ""
 crossplaneBootstrap:
   enabled: true
   schedule: "*/5 * * * *"
+  # Argo CD PreSync runs discovery + patches netappDrDiscoveryJsonB64 before AWS claims sync.
+  # PostSync queues a follow-up sync so Helm renders both FSx filesystems (first sync has no B64 yet).
+  argoHooks:
+    enabled: true
+    presync: true
+    postsync: true
   discoveryNamespace: ""
   discoveryConfigMapName: crossplane-network-discovery
   remoteKubeconfig:
@@ -199,7 +205,7 @@ crossplaneBootstrap:
   # After discovery, patch Argo CD Application(s) with netappDrDiscoveryJsonB64 (Helm-safe) for the next sync.
   argocd:
     patchApplication:
-      enabled: false
+      enabled: true
       # When applicationName is empty and autoDiscover is true, pick the first Application whose path/repo mentions crossplane-aws-infra.
       autoDiscover: true
       # Empty: use global.pattern + "-hub" (Validated Patterns) if global.pattern is set, else openshift-gitops.
@@ -211,7 +217,7 @@ crossplaneBootstrap:
       parentApplicationNamespace: vp-gitops
       parentApplicationName: ""
     patchDrDnsApplication:
-      enabled: false
+      enabled: true
       autoDiscover: true
       # Empty: same namespace as patchApplication (after defaults above).
       applicationNamespace: ""

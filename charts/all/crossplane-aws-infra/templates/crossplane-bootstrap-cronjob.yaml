@@ -100,6 +100,8 @@ spec:
                   value: {{ ($p1.parentApplicationNamespace | default "vp-gitops") | quote }}
                 - name: ARGOCD_PARENT_APPLICATION_NAME
                   value: {{ $p1.parentApplicationName | default "" | quote }}
+                - name: TRIGGER_ARGO_RESYNC
+                  value: "false"
               volumeMounts:
                 - name: scripts
                   mountPath: /scripts

@@ -1,3 +1,4 @@
+{{- if include "crossplane-aws-infra.discoveryProvisionable" . | trim }}
 {{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
 {{- range $inst := $instances }}
 ---
@@ -5,6 +6,8 @@ apiVersion: ec2.aws.upbound.io/v1beta1
 kind: SecurityGroup
 metadata:
   name: {{ $inst.name }}-sg
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:
@@ -20,4 +23,5 @@ spec:
       {{- end }}
   providerConfigRef:
     name: {{ $.Values.global.providerConfigRef }}
+{{- end }}
 {{- end }}

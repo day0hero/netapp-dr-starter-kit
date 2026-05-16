@@ -1,0 +1,74 @@
+---
+# Wait for in-cluster Crossplane network discovery and dual FSx OntapFileSystem CRs.
+# Run after `make install` on the hub (production) cluster.
+#
+# Usage:
+#   make wait-crossplane-bootstrap PROD_KUBECONFIG=... DR_KUBECONFIG=...
+#
+- name: Wait for Crossplane discovery and dual FSx CRs
+  hosts: localhost
+  gather_facts: false
+  vars:
+    prod_kubeconfig: "{{ prod_kubeconfig | default(lookup('env', 'PROD_KUBECONFIG') | default('', true)) }}"
+    discovery_namespace: crossplane-system
+    discovery_cm: crossplane-network-discovery
+    wait_discovery_timeout: "{{ wait_discovery_timeout | default(900) }}"
+    wait_fsx_timeout: "{{ wait_fsx_timeout | default(1800) }}"
+  tasks:
+    - name: Require production kubeconfig
+      ansible.builtin.assert:
+        that:
+          - prod_kubeconfig | length > 0
+          - prod_kubeconfig is file
+        fail_msg: "Set prod_kubeconfig (or PROD_KUBECONFIG) to the hub cluster kubeconfig."
+
+    - name: Wait for discovery ConfigMap
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get configmap {{ discovery_cm }}
+          -n {{ discovery_namespace }}
+          -o jsonpath={.data.discovery\.json}
+      register: _disc_raw
+      until: >
+        _disc_raw.rc == 0 and
+        (_disc_raw.stdout | default('') | from_json).get('_discoveryComplete', false)
+      retries: "{{ (wait_discovery_timeout | int) // 30 }}"
+      delay: 30
+      changed_when: false
+
+    - name: Run discovery CronJob once if fewer than two FSx CRs
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          create job crossplane-discovery-wait-{{ lookup('pipe', 'date +%s') }}
+          --from=cronjob/crossplane-network-discovery
+          -n {{ discovery_namespace }}
+      register: _job_create
+      failed_when: false
+      changed_when: _job_create.rc == 0
+
+    - name: Wait for two OntapFileSystem CRs
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get ontapfilesystems.fsx.aws.upbound.io
+          -o json
+      register: _fsx_json
+      until: (_fsx_json.stdout | from_json).get('items', []) | length >= 2
+      retries: "{{ (wait_fsx_timeout | int) // 30 }}"
+      delay: 30
+      changed_when: false
+
+    - name: Show FSx CRs
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get ontapfilesystems.fsx.aws.upbound.io -o wide
+      changed_when: false
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "Discovery complete and {{ (_fsx_json.stdout | from_json).items | length }} OntapFileSystem CR(s) exist."
+          - "AWS FSx may take 15–30 minutes to reach AVAILABLE; Argo may show Progressing until then."
