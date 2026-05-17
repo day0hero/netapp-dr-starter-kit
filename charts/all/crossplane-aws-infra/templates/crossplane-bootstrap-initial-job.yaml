@@ -22,5 +22,5 @@ spec:
       labels:
         {{- include "crossplane-aws-infra.labels" . | nindent 8 }}
     spec:
-      {{- include "crossplane-aws-infra.discoveryJobPodSpec" (dict "root" . "bootstrap" $b "discoveryHook" "" "triggerResync" "false") | nindent 6 }}
+      {{- include "crossplane-aws-infra.discoveryJobPodSpec" (dict "root" . "bootstrap" $b "discoveryHook" "" "triggerResync" "true") | nindent 6 }}
 {{- end }}

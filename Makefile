@@ -4,7 +4,8 @@
 
 include Makefile-common
 
-# Pattern install does not wait for in-cluster discovery; extend install so dual FSx CRs exist.
+# pattern-install deploys GitOps; wait-crossplane-bootstrap finishes in-cluster discovery and dual FSx CRs.
+# Requires PROD_KUBECONFIG, DR_KUBECONFIG, and ~/values-secret-netapp-dr-starter-kit.yaml (DR kubeconfig in Vault).
 .PHONY: install
 install: pattern-install wait-crossplane-bootstrap
 

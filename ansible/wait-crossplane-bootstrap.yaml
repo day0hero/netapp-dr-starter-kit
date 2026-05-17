@@ -1,6 +1,7 @@
 ---
-# Wait for in-cluster Crossplane network discovery and dual FSx OntapFileSystem CRs.
-# Run after `make install` on the hub (production) cluster.
+# Completes Crossplane bootstrap after `make install` (pattern-install).
+# Ensures parent Argo ignore rules, in-cluster discovery, B64 on the child Application,
+# a follow-up sync for FSx claims, and two OntapFileSystem CRs — no manual Argo steps.
 #
 # Usage:
 #   make wait-crossplane-bootstrap PROD_KUBECONFIG=... DR_KUBECONFIG=...
@@ -10,10 +11,21 @@
   gather_facts: false
   vars:
     prod_kubeconfig: "{{ prod_kubeconfig | default(lookup('env', 'PROD_KUBECONFIG') | default('', true)) }}"
+    dr_kubeconfig: "{{ dr_kubeconfig | default(lookup('env', 'DR_KUBECONFIG') | default('', true)) }}"
+    pattern_name: netapp-dr-starter-kit
+    cluster_group: hub
+    hub_argo_namespace: "{{ pattern_name }}-hub"
+    parent_argo_namespace: vp-gitops
+    parent_application_name: "{{ pattern_name }}-{{ cluster_group }}"
+    crossplane_app_name: crossplane-aws-infra
     discovery_namespace: crossplane-system
     discovery_cm: crossplane-network-discovery
-    wait_discovery_timeout: "{{ wait_discovery_timeout | default(900) }}"
+    discovery_cronjob: crossplane-network-discovery
+    dr_kubeconfig_secret: ocp-dr-cluster-kubeconfig
+    wait_app_timeout: "{{ wait_app_timeout | default(1200) }}"
+    wait_discovery_timeout: "{{ wait_discovery_timeout | default(1200) }}"
     wait_fsx_timeout: "{{ wait_fsx_timeout | default(1800) }}"
+    repo_root: "{{ playbook_dir }}/.."
   tasks:
     - name: Require production kubeconfig
       ansible.builtin.assert:
@@ -22,7 +34,113 @@
           - prod_kubeconfig is file
         fail_msg: "Set prod_kubeconfig (or PROD_KUBECONFIG) to the hub cluster kubeconfig."
 
-    - name: Wait for discovery ConfigMap
+    - name: Require DR kubeconfig for install-time secret validation
+      ansible.builtin.assert:
+        that:
+          - dr_kubeconfig | length > 0
+          - dr_kubeconfig is file
+        fail_msg: >-
+          Set dr_kubeconfig (or DR_KUBECONFIG). Discovery needs the DR cluster peer;
+          load kubeconfigs via ~/values-secret-{{ pattern_name }}.yaml before install.
+
+    - name: Wait for crossplane-aws-infra Argo CD Application
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get application.argoproj.io {{ crossplane_app_name }}
+          -n {{ hub_argo_namespace }}
+      register: _cp_app
+      until: _cp_app.rc == 0
+      retries: "{{ (wait_app_timeout | int) // 20 }}"
+      delay: 20
+      changed_when: false
+
+    - name: Wait for discovery ServiceAccount
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get serviceaccount crossplane-network-discovery
+          -n {{ discovery_namespace }}
+      register: _disc_sa
+      until: _disc_sa.rc == 0
+      retries: "{{ (wait_app_timeout | int) // 15 }}"
+      delay: 15
+      changed_when: false
+
+    - name: Wait for discovery CronJob
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get cronjob {{ discovery_cronjob }}
+          -n {{ discovery_namespace }}
+      register: _disc_cron
+      until: _disc_cron.rc == 0
+      retries: "{{ (wait_app_timeout | int) // 15 }}"
+      delay: 15
+      changed_when: false
+
+    - name: Wait for dr-tools image (discovery job image)
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get imagestreamtag dr-tools:latest -n {{ discovery_namespace }}
+      register: _dr_tools
+      until: _dr_tools.rc == 0
+      retries: "{{ (wait_discovery_timeout | int) // 20 }}"
+      delay: 20
+      changed_when: false
+
+    - name: Wait for DR cluster kubeconfig secret (from Vault / values-secret)
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get secret {{ dr_kubeconfig_secret }}
+          -n {{ discovery_namespace }}
+      register: _dr_secret
+      until: _dr_secret.rc == 0
+      retries: "{{ (wait_discovery_timeout | int) // 20 }}"
+      delay: 20
+      changed_when: false
+
+    - name: Patch parent Pattern Application ignoreDifferences (before discovery)
+      ansible.builtin.command:
+        cmd: >
+          {{ repo_root }}/scripts/patch_parent_argocd_ignore.py
+      environment:
+        KUBECONFIG: "{{ prod_kubeconfig }}"
+        GLOBAL_PATTERN: "{{ pattern_name }}"
+        CLUSTER_GROUP_NAME: "{{ cluster_group }}"
+        ARGOCD_PARENT_APPLICATION_NAMESPACE: "{{ parent_argo_namespace }}"
+        ARGOCD_PARENT_APPLICATION_NAME: "{{ parent_application_name }}"
+      changed_when: true
+
+    - name: Set discovery install Job name
+      ansible.builtin.set_fact:
+        discovery_install_job: "crossplane-discovery-install-{{ lookup('pipe', 'date +%s') }}"
+
+    - name: Run in-cluster discovery Job
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          create job {{ discovery_install_job }}
+          --from=cronjob/{{ discovery_cronjob }}
+          -n {{ discovery_namespace }}
+      register: _disc_job
+      changed_when: _disc_job.rc == 0
+      failed_when: false
+
+    - name: Wait for discovery Job completion
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          wait --for=condition=complete
+          job/{{ discovery_install_job }}
+          -n {{ discovery_namespace }}
+          --timeout=900s
+      when: _disc_job.rc == 0
+      changed_when: false
+
+    - name: Wait for discovery ConfigMap (_discoveryComplete)
       ansible.builtin.command:
         cmd: >
           oc --kubeconfig={{ prod_kubeconfig | quote }}
@@ -37,16 +155,57 @@
       delay: 30
       changed_when: false
 
-    - name: Run discovery CronJob once if fewer than two FSx CRs
+    - name: Wait for netappDrDiscoveryJsonB64 on crossplane-aws-infra Application
       ansible.builtin.command:
         cmd: >
           oc --kubeconfig={{ prod_kubeconfig | quote }}
-          create job crossplane-discovery-wait-{{ lookup('pipe', 'date +%s') }}
-          --from=cronjob/crossplane-network-discovery
-          -n {{ discovery_namespace }}
-      register: _job_create
+          get application.argoproj.io {{ crossplane_app_name }}
+          -n {{ hub_argo_namespace }}
+          -o json
+      register: _app_json
+      until: >
+        _app_json.rc == 0 and
+        (
+          (_app_json.stdout | from_json).get('spec', {}).get('source', {}).get('helm', {}).get('parameters', [])
+          | selectattr('name', 'equalto', 'netappDrDiscoveryJsonB64')
+          | map(attribute='value')
+          | reject('equalto', '')
+          | list
+          | length
+        ) > 0
+      retries: "{{ (wait_discovery_timeout | int) // 20 }}"
+      delay: 20
+      changed_when: false
+
+    - name: Read crossplane-aws-infra target revision
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get application.argoproj.io {{ crossplane_app_name }}
+          -n {{ hub_argo_namespace }}
+          -o jsonpath={.spec.source.targetRevision}
+      register: _cp_rev
+      changed_when: false
+
+    - name: Clear in-flight sync operation on crossplane-aws-infra
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          patch application.argoproj.io {{ crossplane_app_name }}
+          -n {{ hub_argo_namespace }}
+          --type=merge -p '{"operation":null}'
+      changed_when: true
       failed_when: false
-      changed_when: _job_create.rc == 0
+
+    - name: Trigger crossplane-aws-infra sync (FSx stack with discovery B64)
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          patch application.argoproj.io {{ crossplane_app_name }}
+          -n {{ hub_argo_namespace }}
+          --type=merge
+          -p '{"operation":{"initiatedBy":{"username":"make-install"},"sync":{"revision":"{{ _cp_rev.stdout }}","syncOptions":["RespectIgnoreDifferences=true"]}}}'
+      changed_when: true
 
     - name: Wait for two OntapFileSystem CRs
       ansible.builtin.command:
@@ -70,5 +229,5 @@
     - name: Summary
       ansible.builtin.debug:
         msg:
-          - "Discovery complete and {{ (_fsx_json.stdout | from_json).items | length }} OntapFileSystem CR(s) exist."
-          - "AWS FSx may take 15–30 minutes to reach AVAILABLE; Argo may show Progressing until then."
+          - "Crossplane bootstrap complete: discovery OK, B64 on Application, {{ (_fsx_json.stdout | from_json).items | length }} OntapFileSystem CR(s)."
+          - "AWS FSx may take 15–30 minutes to reach AVAILABLE; Trident/Argo may show Progressing until then."

@@ -1028,7 +1028,9 @@ def main() -> int:
         print("secondary discovery written")
         return 0
 
-    # hub
+    # hub — parent ignore first so app-of-apps sync does not revert discovery helm parameters.
+    patch_parent_pattern_application_ignore_differences()
+
     if not remote_kc or not os.path.isfile(remote_kc):
         print("REMOTE_KUBECONFIG_PATH must be set to the DR cluster kubeconfig file", file=sys.stderr)
         return 1
@@ -1140,7 +1142,6 @@ def main() -> int:
     apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
     print("hub discovery written")
     patch_argo_applications_for_hub(out)
-    patch_parent_pattern_application_ignore_differences()
     post_discovery_resync()
     return 0
 
