@@ -316,7 +316,6 @@ clusterGroup:
           limit: 5
         syncOptions:
           - RespectIgnoreDifferences=true
-          - ServerSideApply=true
       ignoreDifferences:
         - group: route53.aws.upbound.io
           kind: Record
@@ -333,47 +332,35 @@ clusterGroup:
             - .spec.managementPolicies
             - .spec.initProvider
             - .spec.forProvider.vpcPeeringConnectionId
-          jsonPointers:
-            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: VPCPeeringConnectionAccepter
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
-          jsonPointers:
-            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: Route
           jqPathExpressions:
             - .spec.forProvider.vpcPeeringConnectionId
             - .spec.managementPolicies
             - .spec.initProvider
-          jsonPointers:
-            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: SecurityGroup
           jqPathExpressions:
             - .spec.forProvider.tags
             - .spec.managementPolicies
             - .spec.initProvider
-          jsonPointers:
-            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: SecurityGroupRule
           jqPathExpressions:
             - .spec.forProvider.securityGroupId
             - .spec.managementPolicies
             - .spec.initProvider
-          jsonPointers:
-            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: VPCPeeringConnectionOptions
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
             - .spec.forProvider.vpcPeeringConnectionId
-          jsonPointers:
-            - /apiVersion
         - group: batch
           kind: CronJob
           name: fsx-endpoint-watcher
@@ -385,22 +372,16 @@ clusterGroup:
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
-          jsonPointers:
-            - /apiVersion
         - group: fsx.aws.upbound.io
           kind: OntapStorageVirtualMachine
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
-          jsonPointers:
-            - /apiVersion
         - group: s3.aws.upbound.io
           kind: Bucket
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
-          jsonPointers:
-            - /apiVersion
         - group: s3.aws.upbound.io
           kind: BucketVersioning
           jqPathExpressions:
