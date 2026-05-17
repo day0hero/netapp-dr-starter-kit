@@ -100,6 +100,8 @@ spec:
                   value: {{ ternary "true" "false" (and ($p1.enabled | default false) ($p1.parentIgnoreDifferences | default true)) | quote }}
                 - name: RETRY_VPC_PEERING_OPTIONS
                   value: "true"
+                - name: ADOPT_FSX_SECURITY_GROUPS
+                  value: "true"
                 - name: ARGOCD_PARENT_APPLICATION_NAMESPACE
                   value: {{ ($p1.parentApplicationNamespace | default "vp-gitops") | quote }}
                 - name: ARGOCD_PARENT_APPLICATION_NAME

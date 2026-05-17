@@ -698,6 +698,75 @@ def resolve_child_application(namespace: str, env_name: str, auto: bool, substri
     return name
 
 
+def adopt_security_group_external_names() -> None:
+    """Annotate FSx security group CRs with crossplane.io/external-name so they adopt existing AWS SGs."""
+    if os.environ.get("ADOPT_FSX_SECURITY_GROUPS", "true").lower() != "true":
+        return
+    kubeconfig = os.environ.get("KUBECONFIG", "").strip()
+    oc = ["oc"]
+    if kubeconfig:
+        oc.extend(["--kubeconfig", kubeconfig])
+    try:
+        sg_list = json.loads(
+            subprocess.run(
+                [*oc, "get", "securitygroup.ec2.aws.upbound.io", "-o", "json"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        )
+    except subprocess.CalledProcessError:
+        return
+    for item in sg_list.get("items") or []:
+        meta = item.get("metadata") or {}
+        name = meta.get("name") or ""
+        if not name.endswith("-sg"):
+            continue
+        ann = meta.get("annotations") or {}
+        if (ann.get("crossplane.io/external-name") or "").strip():
+            continue
+        region = ((item.get("spec") or {}).get("forProvider") or {}).get("region") or ""
+        if not region:
+            continue
+        sg_aws_name = name
+        try:
+            out = subprocess.run(
+                [
+                    "aws",
+                    "ec2",
+                    "describe-security-groups",
+                    "--region",
+                    region,
+                    "--filters",
+                    f"Name=group-name,Values={sg_aws_name}",
+                    "--query",
+                    "SecurityGroups[0].GroupId",
+                    "--output",
+                    "text",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if out.returncode != 0 or not (out.stdout or "").strip() or out.stdout.strip() == "None":
+                continue
+            ext_id = out.stdout.strip()
+            print(f"Adopting SecurityGroup/{name} external-name={ext_id}")
+            subprocess.run(
+                [
+                    *oc,
+                    "annotate",
+                    "securitygroup.ec2.aws.upbound.io",
+                    name,
+                    f"crossplane.io/external-name={ext_id}",
+                    "--overwrite",
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except (subprocess.CalledProcessError, OSError):
+            continue
+
+
 def retry_vpc_peering_connection_options() -> None:
     """Delete options CRs that failed while peering was pending so Crossplane recreates them when active."""
     if os.environ.get("RETRY_VPC_PEERING_OPTIONS", "true").lower() != "true":
@@ -1204,6 +1273,7 @@ def main() -> int:
     apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
     print("hub discovery written")
     patch_argo_applications_for_hub(out)
+    adopt_security_group_external_names()
     retry_vpc_peering_connection_options()
     post_discovery_resync()
     return 0

@@ -169,6 +169,45 @@ clusterGroup:
           hs.status = "Progressing"
           hs.message = "Awaiting FSx OntapStorageVirtualMachine status."
           return hs
+      # Crossplane SG: delete blocked by FSx must not block app sync for hours.
+      - kind: SecurityGroup
+        group: ec2.aws.upbound.io
+        check: |
+          hs = {}
+          if obj.metadata ~= nil and obj.metadata.deletionTimestamp ~= nil then
+            hs.status = "Healthy"
+            hs.message = "SecurityGroup terminating in AWS (ignored for sync gate)"
+            return hs
+          end
+          local ready = nil
+          local synced = nil
+          if obj.status ~= nil and obj.status.conditions ~= nil then
+            for i, c in ipairs(obj.status.conditions) do
+              if c.type == "Ready" then
+                ready = c.status
+              elseif c.type == "Synced" then
+                synced = c.status
+              end
+            end
+          end
+          if synced == "False" then
+            hs.status = "Degraded"
+            hs.message = "SecurityGroup provider sync failed"
+            return hs
+          end
+          if ready == "True" then
+            hs.status = "Healthy"
+            hs.message = "Security group ready"
+            return hs
+          end
+          if ready == "False" then
+            hs.status = "Progressing"
+            hs.message = "Security group reconciling"
+            return hs
+          end
+          hs.status = "Progressing"
+          hs.message = "Awaiting SecurityGroup status"
+          return hs
     resourceActions:
       - group: protect.trident.netapp.io
         kind: AppMirrorRelationship
@@ -270,12 +309,14 @@ clusterGroup:
       # Prune orphaned Crossplane claims when bucket name / discovery changes (e.g. trident-protect-bucket -> xrd-appvault-protect).
       syncPolicy:
         automated:
-          prune: true
+          # Prune caused SecurityGroups to delete while FSx still referenced them (hours-long OutOfSync).
+          prune: false
           selfHeal: true
         retry:
-          limit: 20
+          limit: 5
         syncOptions:
           - RespectIgnoreDifferences=true
+          - ServerSideApply=true
       ignoreDifferences:
         - group: route53.aws.upbound.io
           kind: Record
@@ -287,44 +328,79 @@ clusterGroup:
             - .spec.forProvider.enableSni
             - .spec.forProvider.tags
         - group: ec2.aws.upbound.io
+          kind: VPCPeeringConnection
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
+            - .spec.forProvider.vpcPeeringConnectionId
+          jsonPointers:
+            - /apiVersion
+        - group: ec2.aws.upbound.io
+          kind: VPCPeeringConnectionAccepter
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
+          jsonPointers:
+            - /apiVersion
+        - group: ec2.aws.upbound.io
           kind: Route
           jqPathExpressions:
             - .spec.forProvider.vpcPeeringConnectionId
             - .spec.managementPolicies
             - .spec.initProvider
+          jsonPointers:
+            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: SecurityGroup
           jqPathExpressions:
             - .spec.forProvider.tags
             - .spec.managementPolicies
             - .spec.initProvider
+          jsonPointers:
+            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: SecurityGroupRule
           jqPathExpressions:
             - .spec.forProvider.securityGroupId
             - .spec.managementPolicies
             - .spec.initProvider
+          jsonPointers:
+            - /apiVersion
         - group: ec2.aws.upbound.io
           kind: VPCPeeringConnectionOptions
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
             - .spec.forProvider.vpcPeeringConnectionId
+          jsonPointers:
+            - /apiVersion
+        - group: batch
+          kind: CronJob
+          name: fsx-endpoint-watcher
+          jqPathExpressions:
+            - .spec.jobTemplate
+            - .metadata.annotations
         - group: fsx.aws.upbound.io
           kind: OntapFileSystem
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
+          jsonPointers:
+            - /apiVersion
         - group: fsx.aws.upbound.io
           kind: OntapStorageVirtualMachine
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
+          jsonPointers:
+            - /apiVersion
         - group: s3.aws.upbound.io
           kind: Bucket
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
+          jsonPointers:
+            - /apiVersion
         - group: s3.aws.upbound.io
           kind: BucketVersioning
           jqPathExpressions:

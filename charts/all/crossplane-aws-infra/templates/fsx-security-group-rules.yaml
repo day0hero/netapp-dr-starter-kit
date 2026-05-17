@@ -15,6 +15,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "11"
 spec:
+  deletionPolicy: Orphan
   forProvider:
     region: {{ $inst.region }}
     type: ingress
@@ -42,7 +43,10 @@ apiVersion: ec2.aws.upbound.io/v1beta1
 kind: SecurityGroupRule
 metadata:
   name: {{ $sgName }}-egress-all
+  annotations:
+    argocd.argoproj.io/sync-wave: "11"
 spec:
+  deletionPolicy: Orphan
   forProvider:
     region: {{ $inst.region }}
     type: egress
