@@ -7,7 +7,7 @@ kind: SecurityGroup
 metadata:
   name: {{ $inst.name }}-sg
   annotations:
-    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-wave: "10"
   labels:
     {{- include "crossplane-aws-infra.labels" $ | nindent 4 }}
 spec:

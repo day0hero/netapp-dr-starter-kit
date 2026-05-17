@@ -1,4 +1,4 @@
-{{- if .Values.s3AppVault.enabled }}
+{{- if and .Values.s3AppVault.enabled (include "crossplane-aws-infra.discoveryProvisionable" . | trim) }}
 {{- $s3 := include "crossplane-aws-infra.mergedS3AppVault" . | fromJson }}
 {{- $bucket := required "Set tridentProtect.appVault.s3.bucketName in values-global (S3 bucket name Crossplane will create if missing in AWS)" $s3.bucketName }}
 {{- $region := required "Set tridentProtect.appVault.s3.region in values-global" $s3.region }}
@@ -7,6 +7,8 @@ apiVersion: s3.aws.upbound.io/v1beta2
 kind: Bucket
 metadata:
   name: {{ $bucket }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "7"
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
@@ -25,6 +27,8 @@ apiVersion: s3.aws.upbound.io/v1beta1
 kind: BucketVersioning
 metadata:
   name: {{ $bucket }}-versioning
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"
 spec:
   forProvider:
     region: {{ $region }}
@@ -39,6 +43,8 @@ apiVersion: s3.aws.upbound.io/v1beta1
 kind: BucketServerSideEncryptionConfiguration
 metadata:
   name: {{ $bucket }}-sse
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"
 spec:
   forProvider:
     region: {{ $region }}
@@ -55,6 +61,8 @@ apiVersion: s3.aws.upbound.io/v1beta1
 kind: BucketPublicAccessBlock
 metadata:
   name: {{ $bucket }}-public-access
+  annotations:
+    argocd.argoproj.io/sync-wave: "8"
 spec:
   forProvider:
     region: {{ $region }}

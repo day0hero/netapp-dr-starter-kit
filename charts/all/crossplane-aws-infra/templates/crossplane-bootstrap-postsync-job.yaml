@@ -8,7 +8,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   annotations:
     argocd.argoproj.io/hook: PostSync
-    argocd.argoproj.io/sync-wave: "10"
+    argocd.argoproj.io/sync-wave: "100"
     argocd.argoproj.io/hook-delete-policy: HookSucceeded
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}

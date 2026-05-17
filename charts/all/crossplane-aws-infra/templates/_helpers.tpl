@@ -96,10 +96,11 @@ Priority: netappDrDiscoveryJson > netappDrDiscoveryJsonB64 > ConfigMap lookup (l
 {{- $tp := .Values.tridentProtect | default dict }}
 {{- $av := ($tp.appVault).s3 | default dict }}
 {{- $m := mergeOverwrite (deepCopy .Values.s3AppVault) $fromDisc }}
-{{- if not ($m.bucketName | default "") }}
+{{- /* Prefer values-global tridentProtect.appVault.s3 over chart default (trident-protect-bucket). */}}
+{{- if $av.bucketName }}
 {{- $_ := set $m "bucketName" $av.bucketName }}
 {{- end }}
-{{- if not ($m.region | default "") }}
+{{- if $av.region }}
 {{- $_ := set $m "region" $av.region }}
 {{- end }}
 {{- $m | toJson }}

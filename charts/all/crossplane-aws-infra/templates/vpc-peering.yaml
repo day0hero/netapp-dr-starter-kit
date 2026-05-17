@@ -11,7 +11,7 @@ kind: VPCPeeringConnection
 metadata:
   name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
   annotations:
-    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-wave: "4"
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
@@ -36,7 +36,7 @@ kind: VPCPeeringConnectionAccepter
 metadata:
   name: {{ $dr.clusterName }}-accept-{{ $prod.clusterName }}
   annotations:
-    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-wave: "5"
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
@@ -103,6 +103,8 @@ apiVersion: ec2.aws.upbound.io/v1beta1
 kind: Route
 metadata:
   name: prod-to-dr-rt-{{ $i }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
 spec:
   forProvider:
     region: {{ $prod.region }}
@@ -121,6 +123,8 @@ apiVersion: ec2.aws.upbound.io/v1beta1
 kind: Route
 metadata:
   name: dr-to-prod-rt-{{ $i }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
 spec:
   forProvider:
     region: {{ $dr.region }}

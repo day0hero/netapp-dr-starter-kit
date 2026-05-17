@@ -13,7 +13,7 @@ kind: SecurityGroupRule
 metadata:
   name: {{ $sgName }}-{{ $rule.name }}
   annotations:
-    argocd.argoproj.io/sync-wave: "6"
+    argocd.argoproj.io/sync-wave: "11"
 spec:
   forProvider:
     region: {{ $inst.region }}
