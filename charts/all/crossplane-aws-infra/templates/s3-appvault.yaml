@@ -8,7 +8,7 @@ kind: Bucket
 metadata:
   name: {{ $bucket }}
   annotations:
-    argocd.argoproj.io/sync-wave: "7"
+    argocd.argoproj.io/sync-wave: "8"
   labels:
     {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
 spec:
@@ -28,7 +28,7 @@ kind: BucketVersioning
 metadata:
   name: {{ $bucket }}-versioning
   annotations:
-    argocd.argoproj.io/sync-wave: "8"
+    argocd.argoproj.io/sync-wave: "9"
 spec:
   forProvider:
     region: {{ $region }}
@@ -44,7 +44,7 @@ kind: BucketServerSideEncryptionConfiguration
 metadata:
   name: {{ $bucket }}-sse
   annotations:
-    argocd.argoproj.io/sync-wave: "8"
+    argocd.argoproj.io/sync-wave: "9"
 spec:
   forProvider:
     region: {{ $region }}
@@ -62,7 +62,7 @@ kind: BucketPublicAccessBlock
 metadata:
   name: {{ $bucket }}-public-access
   annotations:
-    argocd.argoproj.io/sync-wave: "8"
+    argocd.argoproj.io/sync-wave: "9"
 spec:
   forProvider:
     region: {{ $region }}

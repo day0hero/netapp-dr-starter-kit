@@ -2,7 +2,7 @@
 {{- $instances := include "crossplane-aws-infra.fsxInstances" . | fromJsonArray }}
 {{- range $inst := $instances }}
 ---
-apiVersion: fsx.aws.upbound.io/v1beta1
+apiVersion: fsx.aws.upbound.io/v1beta2
 kind: OntapFileSystem
 metadata:
   name: {{ $inst.name }}

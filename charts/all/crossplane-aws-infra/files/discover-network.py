@@ -698,6 +698,68 @@ def resolve_child_application(namespace: str, env_name: str, auto: bool, substri
     return name
 
 
+def retry_vpc_peering_connection_options() -> None:
+    """Delete options CRs that failed while peering was pending so Crossplane recreates them when active."""
+    if os.environ.get("RETRY_VPC_PEERING_OPTIONS", "true").lower() != "true":
+        return
+    kubeconfig = os.environ.get("KUBECONFIG", "").strip()
+    oc = ["oc"]
+    if kubeconfig:
+        oc.extend(["--kubeconfig", kubeconfig])
+    try:
+        peerings = json.loads(
+            subprocess.run(
+                [*oc, "get", "vpcpeeringconnection.ec2.aws.upbound.io", "-o", "json"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        )
+    except subprocess.CalledProcessError:
+        return
+    active = any(
+        (
+            ((item.get("status") or {}).get("atProvider") or {}).get("acceptStatus") or ""
+        ).lower()
+        == "active"
+        for item in peerings.get("items") or []
+    )
+    if not active:
+        return
+    try:
+        opts_list = json.loads(
+            subprocess.run(
+                [*oc, "get", "vpcpeeringconnectionoptions.ec2.aws.upbound.io", "-o", "json"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+        )
+    except subprocess.CalledProcessError:
+        return
+    for item in opts_list.get("items") or []:
+        name = (item.get("metadata") or {}).get("name") or ""
+        if not name:
+            continue
+        conds = (item.get("status") or {}).get("conditions") or []
+        last_async = next((c for c in conds if c.get("type") == "LastAsyncOperation"), {})
+        at = (item.get("status") or {}).get("atProvider") or {}
+        req = at.get("requester") or {}
+        acc = at.get("accepter") or {}
+        spec_fp = (item.get("spec") or {}).get("forProvider") or {}
+        wants_dns = bool((spec_fp.get("requester") or {}).get("allowRemoteVpcDnsResolution")) or bool(
+            (spec_fp.get("accepter") or {}).get("allowRemoteVpcDnsResolution")
+        )
+        has_dns = bool(req.get("allowRemoteVpcDnsResolution")) or bool(acc.get("allowRemoteVpcDnsResolution"))
+        if last_async.get("status") == "False" or (wants_dns and not has_dns):
+            print(f"Deleting VPCPeeringConnectionOptions/{name} for retry (peering active)")
+            subprocess.run(
+                [*oc, "delete", "vpcpeeringconnectionoptions.ec2.aws.upbound.io", name, "--wait=false"],
+                capture_output=True,
+                text=True,
+            )
+
+
 def post_discovery_resync() -> None:
     """After patching discovery B64, trigger refresh + follow-up sync so Helm renders both FSx filesystems."""
     if os.environ.get("TRIGGER_ARGO_RESYNC", "true").lower() != "true":
@@ -1142,6 +1204,7 @@ def main() -> int:
     apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
     print("hub discovery written")
     patch_argo_applications_for_hub(out)
+    retry_vpc_peering_connection_options()
     post_discovery_resync()
     return 0
 

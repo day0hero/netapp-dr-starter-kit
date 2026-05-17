@@ -6,7 +6,7 @@
 {{- $dr := $vp.dr }}
 
 ---
-apiVersion: ec2.aws.upbound.io/v1beta1
+apiVersion: ec2.aws.upbound.io/v1beta2
 kind: VPCPeeringConnection
 metadata:
   name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
@@ -31,7 +31,7 @@ spec:
     name: {{ $providerConfigRef }}
 
 ---
-apiVersion: ec2.aws.upbound.io/v1beta1
+apiVersion: ec2.aws.upbound.io/v1beta2
 kind: VPCPeeringConnectionAccepter
 metadata:
   name: {{ $dr.clusterName }}-accept-{{ $prod.clusterName }}
@@ -59,13 +59,13 @@ spec:
 
 {{- if .Values.vpcPeering.enableDnsResolution }}
 ---
-apiVersion: ec2.aws.upbound.io/v1beta1
+apiVersion: ec2.aws.upbound.io/v1beta2
 kind: VPCPeeringConnectionOptions
 metadata:
   name: {{ $prod.clusterName }}-peering-opts-requester
   annotations:
-    # Apply after peering + accepter so EC2 peering is active before ModifyVpcPeeringConnectionOptions.
-    argocd.argoproj.io/sync-wave: "5"
+    # After accepter (wave 5); EC2 rejects options until peering is active.
+    argocd.argoproj.io/sync-wave: "6"
 spec:
   managementPolicies: ["Observe", "Create", "Delete"]
   forProvider:
@@ -73,17 +73,17 @@ spec:
     vpcPeeringConnectionIdRef:
       name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
     requester:
-      - allowRemoteVpcDnsResolution: true
+      allowRemoteVpcDnsResolution: true
   providerConfigRef:
     name: {{ $providerConfigRef }}
 
 ---
-apiVersion: ec2.aws.upbound.io/v1beta1
+apiVersion: ec2.aws.upbound.io/v1beta2
 kind: VPCPeeringConnectionOptions
 metadata:
   name: {{ $dr.clusterName }}-peering-opts-accepter
   annotations:
-    argocd.argoproj.io/sync-wave: "5"
+    argocd.argoproj.io/sync-wave: "6"
 spec:
   managementPolicies: ["Observe", "Create", "Delete"]
   forProvider:
@@ -91,7 +91,7 @@ spec:
     vpcPeeringConnectionIdRef:
       name: {{ $prod.clusterName }}-to-{{ $dr.clusterName }}
     accepter:
-      - allowRemoteVpcDnsResolution: true
+      allowRemoteVpcDnsResolution: true
   providerConfigRef:
     name: {{ $providerConfigRef }}
 {{- end }}
@@ -99,12 +99,12 @@ spec:
 {{/* Routes: Prod VPC -> DR VPC */}}
 {{- range $i, $rtId := $prod.routeTableIds }}
 ---
-apiVersion: ec2.aws.upbound.io/v1beta1
+apiVersion: ec2.aws.upbound.io/v1beta2
 kind: Route
 metadata:
   name: prod-to-dr-rt-{{ $i }}
   annotations:
-    argocd.argoproj.io/sync-wave: "6"
+    argocd.argoproj.io/sync-wave: "7"
 spec:
   forProvider:
     region: {{ $prod.region }}
@@ -119,12 +119,12 @@ spec:
 {{/* Routes: DR VPC -> Prod VPC */}}
 {{- range $i, $rtId := $dr.routeTableIds }}
 ---
-apiVersion: ec2.aws.upbound.io/v1beta1
+apiVersion: ec2.aws.upbound.io/v1beta2
 kind: Route
 metadata:
   name: dr-to-prod-rt-{{ $i }}
   annotations:
-    argocd.argoproj.io/sync-wave: "6"
+    argocd.argoproj.io/sync-wave: "7"
 spec:
   forProvider:
     region: {{ $dr.region }}

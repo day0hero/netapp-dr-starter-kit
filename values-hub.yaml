@@ -287,9 +287,59 @@ clusterGroup:
             - .spec.forProvider.enableSni
             - .spec.forProvider.tags
         - group: ec2.aws.upbound.io
+          kind: Route
+          jqPathExpressions:
+            - .spec.forProvider.vpcPeeringConnectionId
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: ec2.aws.upbound.io
+          kind: SecurityGroup
+          jqPathExpressions:
+            - .spec.forProvider.tags
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: ec2.aws.upbound.io
+          kind: SecurityGroupRule
+          jqPathExpressions:
+            - .spec.forProvider.securityGroupId
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: ec2.aws.upbound.io
           kind: VPCPeeringConnectionOptions
           jqPathExpressions:
             - .spec.managementPolicies
+            - .spec.initProvider
+            - .spec.forProvider.vpcPeeringConnectionId
+        - group: fsx.aws.upbound.io
+          kind: OntapFileSystem
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: fsx.aws.upbound.io
+          kind: OntapStorageVirtualMachine
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: s3.aws.upbound.io
+          kind: Bucket
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: s3.aws.upbound.io
+          kind: BucketVersioning
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: s3.aws.upbound.io
+          kind: BucketServerSideEncryptionConfiguration
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
+        - group: s3.aws.upbound.io
+          kind: BucketPublicAccessBlock
+          jqPathExpressions:
+            - .spec.managementPolicies
+            - .spec.initProvider
     dr-dns-reconciler:
       name: dr-dns-reconciler
       namespace: crossplane-system
