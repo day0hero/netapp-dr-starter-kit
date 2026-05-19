@@ -1279,8 +1279,16 @@ def main() -> int:
     return 0
 
 
+def parent_ignore_guard_main() -> int:
+    """Re-apply hub Pattern Application ignoreDifferences (wiped by parent selfHeal from Git)."""
+    patch_parent_pattern_application_ignore_differences()
+    return 0
+
+
 if __name__ == "__main__":
     try:
+        if os.environ.get("ARGOCD_PARENT_IGNORE_GUARD", "").lower() == "true":
+            raise SystemExit(parent_ignore_guard_main())
         hook = os.environ.get("DISCOVERY_HOOK", "").strip().lower()
         if hook == "postsync":
             raise SystemExit(postsync_hook_main())

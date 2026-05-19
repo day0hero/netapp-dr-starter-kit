@@ -1,0 +1,58 @@
+{{- if .Values.crossplaneBootstrap.enabled }}
+{{- $b := .Values.crossplaneBootstrap }}
+{{- $argo := $b.argocd | default dict }}
+{{- $p1 := $argo.patchApplication | default dict }}
+{{- if and ($p1.enabled | default false) ($p1.parentIgnoreDifferences | default true) }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: argocd-parent-ignore-guard
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  labels:
+    {{- include "crossplane-aws-infra.labels" . | nindent 4 }}
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          labels:
+            {{- include "crossplane-aws-infra.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: crossplane-network-discovery
+          containers:
+            - name: guard
+              image: {{ .Values.endpointWatcher.image | quote }}
+              command: ["python3", "/scripts/discover-network.py"]
+              env:
+                - name: ARGOCD_PARENT_IGNORE_GUARD
+                  value: "true"
+                - name: PATCH_ARGOCD_PARENT_IGNORE_DIFFERENCES
+                  value: "true"
+                - name: GLOBAL_PATTERN
+                  value: {{ .Values.global.pattern | quote }}
+                - name: CLUSTER_GROUP_NAME
+                  value: {{ .Values.clusterGroup.name | default "hub" | quote }}
+                - name: ARGOCD_PARENT_APPLICATION_NAMESPACE
+                  value: {{ ($p1.parentApplicationNamespace | default "vp-gitops") | quote }}
+                - name: ARGOCD_PARENT_APPLICATION_NAME
+                  value: {{ $p1.parentApplicationName | default "" | quote }}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: scripts
+              configMap:
+                name: crossplane-bootstrap-scripts
+                defaultMode: 0555
+{{- end }}
+{{- end }}

@@ -186,6 +186,17 @@
           get ontapfilesystems.fsx.aws.upbound.io -o wide
       changed_when: false
 
+    - name: Re-apply parent Application ignoreDifferences (survives discovery B64 on child Apps)
+      ansible.builtin.command:
+        cmd: "{{ repo_root }}/scripts/patch_parent_argocd_ignore.py"
+      environment:
+        KUBECONFIG: "{{ prod_kubeconfig }}"
+        GLOBAL_PATTERN: "{{ pattern_name }}"
+        CLUSTER_GROUP_NAME: "{{ cluster_group }}"
+        ARGOCD_PARENT_APPLICATION_NAMESPACE: "{{ parent_argo_namespace }}"
+        ARGOCD_PARENT_APPLICATION_NAME: "{{ parent_application_name }}"
+      changed_when: true
+
     - name: Summary
       ansible.builtin.debug:
         msg:
