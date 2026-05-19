@@ -146,6 +146,55 @@
       delay: 30
       changed_when: false
 
+    - name: Set discovery adopt Job name
+      ansible.builtin.set_fact:
+        discovery_adopt_job: "crossplane-discovery-adopt-{{ lookup('pipe', 'date +%s') }}"
+
+    - name: Re-run discovery Job (adopt pre-existing FSx security groups after SG CRs exist)
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          create job {{ discovery_adopt_job }}
+          --from=cronjob/{{ discovery_cronjob }}
+          -n {{ discovery_namespace }}
+      register: _disc_adopt_job
+      failed_when: false
+      changed_when: _disc_adopt_job.rc == 0
+
+    - name: Wait for adopt discovery Job
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          wait --for=condition=complete
+          job/{{ discovery_adopt_job }}
+          -n {{ discovery_namespace }}
+          --timeout=900s
+      when: _disc_adopt_job.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for two FSx security groups Ready
+      ansible.builtin.shell: |
+        exec oc --kubeconfig={{ prod_kubeconfig | quote }} get securitygroup.ec2.aws.upbound.io -o json | python3 -c "
+        import json, sys
+        items = json.load(sys.stdin).get('items', [])
+        ready = 0
+        for i in items:
+          name = (i.get('metadata') or {}).get('name') or ''
+          if not name.endswith('-sg'):
+            continue
+          for c in (i.get('status') or {}).get('conditions') or []:
+            if c.get('type') == 'Ready' and c.get('status') == 'True':
+              ready += 1
+              break
+        sys.exit(0 if ready >= 2 else 1)
+        "
+      register: _sg_ready
+      until: _sg_ready.rc == 0
+      retries: "{{ (wait_discovery_timeout | int) // 30 }}"
+      delay: 30
+      changed_when: false
+
     - name: Wait for netappDrDiscoveryJsonB64 on crossplane-aws-infra
       ansible.builtin.command:
         cmd: >

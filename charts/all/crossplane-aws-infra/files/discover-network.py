@@ -748,6 +748,12 @@ def adopt_security_group_external_names() -> None:
                 text=True,
             )
             if out.returncode != 0 or not (out.stdout or "").strip() or out.stdout.strip() == "None":
+                err = (out.stderr or out.stdout or "").strip()
+                print(
+                    f"SecurityGroup/{name}: no AWS SG named {sg_aws_name} in {region}"
+                    + (f" ({err})" if err else ""),
+                    file=sys.stderr,
+                )
                 continue
             ext_id = out.stdout.strip()
             print(f"Adopting SecurityGroup/{name} external-name={ext_id}")
@@ -871,6 +877,9 @@ def postsync_hook_main() -> int:
     if not argo_ns or not cp_name:
         print("PostSync: skip (no crossplane-aws-infra Application namespace/name)")
         return 0
+    # SG CRs are often created after the initial discovery Job; adopt again before resync.
+    adopt_security_group_external_names()
+    retry_vpc_peering_connection_options()
     fsx_count = count_ontap_filesystems()
     print(f"PostSync: OntapFileSystem count={fsx_count}")
     if fsx_count >= 2:
@@ -1272,6 +1281,8 @@ def main() -> int:
     }
     apply_configmap(ns, cm_name, {"discovery.json": json.dumps(out, indent=2)})
     print("hub discovery written")
+    # Adopt before and after Argo patches: SG CRs may appear only after the first sync wave.
+    adopt_security_group_external_names()
     patch_argo_applications_for_hub(out)
     adopt_security_group_external_names()
     retry_vpc_peering_connection_options()
