@@ -66,7 +66,7 @@ clusterGroup:
           end
           return hs
       # Crossplane FSx: Ready=False during AWS CREATING should be Progressing, not Degraded.
-      # Argo CD resource health Lua is Lua 5.1-style: use string.lower / string.find (not "str":lower()).
+      # Argo CD health Lua has no global `string` table; use :find() on string values (not string.lower).
       - kind: OntapFileSystem
         group: fsx.aws.upbound.io
         check: |
@@ -102,8 +102,8 @@ clusterGroup:
             return hs
           end
           if ready == "False" then
-            local r = string.lower(tostring(ready_reason or ""))
-            if string.find(r, "error", 1, true) ~= nil or string.find(r, "fail", 1, true) ~= nil then
+            local r = tostring(ready_reason or "")
+            if r:find("[eE]rror") or r:find("[fF]ail") then
               hs.status = "Degraded"
               hs.message = ready_msg ~= "" and ready_msg or ready_reason
               return hs
@@ -153,8 +153,8 @@ clusterGroup:
             return hs
           end
           if ready == "False" then
-            local r = string.lower(tostring(ready_reason or ""))
-            if string.find(r, "error", 1, true) ~= nil or string.find(r, "fail", 1, true) ~= nil then
+            local r = tostring(ready_reason or "")
+            if r:find("[eE]rror") or r:find("[fF]ail") then
               hs.status = "Degraded"
               hs.message = ready_msg ~= "" and ready_msg or ready_reason
               return hs
