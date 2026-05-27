@@ -452,6 +452,40 @@ clusterGroup:
       namespace: wordpress
       argoProject: workload
       path: charts/all/wordpress
+      syncPolicy:
+        automated:
+          selfHeal: true
+        syncOptions:
+          - RespectIgnoreDifferences=true
+      ignoreDifferences:
+        # OpenShift assigns spec.host and status.ingress when host is omitted from Git.
+        - group: route.openshift.io
+          kind: Route
+          jqPathExpressions:
+            - .spec.host
+            - .status
+        # ESO / Vault populate secret data after sync.
+        - kind: Secret
+          jqPathExpressions:
+            - .data
+        - group: external-secrets.io
+          kind: ExternalSecret
+          jqPathExpressions:
+            - .status
+        # Bitnami chart checksum annotations change when secrets update.
+        - group: apps
+          kind: Deployment
+          jqPathExpressions:
+            - .spec.template.metadata.annotations
+        - group: apps
+          kind: StatefulSet
+          jqPathExpressions:
+            - .spec.template.metadata.annotations
+            - .status
+        - kind: PersistentVolumeClaim
+          jqPathExpressions:
+            - .spec.volumeName
+            - .status
     dr-monitoring:
       name: dr-monitoring
       namespace: openshift-monitoring
@@ -467,17 +501,31 @@ clusterGroup:
       chartVersion: 0.0.*
       argoProject: workload
       syncPolicy:
+        automated:
+          selfHeal: true
         syncOptions:
           - RespectIgnoreDifferences=true
       ignoreDifferences:
+        # OpenShift assigns spec.host on the frontend Route (chart omits host).
+        - group: route.openshift.io
+          kind: Route
+          jqPathExpressions:
+            - .spec.host
+            - .status
         # Pattern operator owns this CRD; boutique chart only references it.
-        # jsonPointers [/] does not clear OutOfSync on all Argo versions; ignore whole object via jq.
         - group: apiextensions.k8s.io
           kind: CustomResourceDefinition
           name: patterns.gitops.hybrid-cloud-patterns.io
           jqPathExpressions:
             - .metadata
             - .spec
+            - .status
+        - kind: Secret
+          jqPathExpressions:
+            - .data
+        - kind: PersistentVolumeClaim
+          jqPathExpressions:
+            - .spec.volumeName
             - .status
       overrides:
         - name: global.storageClass

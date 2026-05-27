@@ -4,10 +4,34 @@
 
 include Makefile-common
 
-# pattern-install deploys GitOps; wait-crossplane-bootstrap finishes in-cluster discovery and dual FSx CRs.
-# Requires PROD_KUBECONFIG, DR_KUBECONFIG, and ~/values-secret-netapp-dr-starter-kit.yaml (DR kubeconfig in Vault).
-.PHONY: install
-install: pattern-install wait-crossplane-bootstrap
+# Hub install uses PROD_KUBECONFIG as KUBECONFIG. Staged Argo waits avoid rhvp.cluster_utils.install
+# failing while crossplane-aws-infra waits for in-cluster discovery (see ansible/wait-argo-applications.yaml).
+# Kubeconfig paths default from ~/values-secret-netapp-dr-starter-kit.yaml (see values-secret.yaml.template).
+_HUB_ANSIBLE = KUBECONFIG="$(_PROD_KUBECONFIG)" $(ANSIBLE_RUN)
+
+.PHONY: install pattern-install-hub wait-argo-pre-bootstrap wait-argo-post-bootstrap
+install: pattern-install-hub wait-argo-pre-bootstrap wait-crossplane-bootstrap wait-argo-post-bootstrap ## Hub install (kubeconfigs from values-secret or PROD_/DR_KUBECONFIG)
+
+pattern-install-hub: ## Install pattern on hub (PROD_KUBECONFIG); skips blanket Argo health gate
+	$(call _validate_kubeconfigs,install)
+	@echo "Installing pattern on hub cluster (KUBECONFIG=$(_PROD_KUBECONFIG))..."
+	@$(_HUB_ANSIBLE) rhvp.cluster_utils.load_bootstrap_secrets
+	@$(_HUB_ANSIBLE) rhvp.cluster_utils.operator_deploy
+	@$(_HUB_ANSIBLE) rhvp.cluster_utils.load_secrets
+
+wait-argo-pre-bootstrap: ## Wait for hub Argo apps except crossplane-aws-infra / dr-dns-reconciler
+	$(call _validate_kubeconfigs,wait-argo-pre-bootstrap)
+	@echo "Waiting for hub Argo CD applications (pre Crossplane bootstrap)..."
+	@$(ANSIBLE_RUN) ansible/wait-argo-applications.yaml \
+		-e prod_kubeconfig=$(_PROD_KUBECONFIG) \
+		-e wait_phase=pre_bootstrap
+
+wait-argo-post-bootstrap: ## Wait for crossplane-aws-infra (and dr-dns) Synced after discovery
+	$(call _validate_kubeconfigs,wait-argo-post-bootstrap)
+	@echo "Waiting for Crossplane bootstrap Argo CD applications to sync..."
+	@$(ANSIBLE_RUN) ansible/wait-argo-applications.yaml \
+		-e prod_kubeconfig=$(_PROD_KUBECONFIG) \
+		-e wait_phase=post_bootstrap
 
 # =============================================================================
 # NetApp DR Starter Kit - Infrastructure Targets
@@ -18,16 +42,24 @@ install: pattern-install wait-crossplane-bootstrap
 #   - Crossplane values written to Helm values files
 #   - ArgoCD syncs Crossplane managed resources (FSx, S3, VPC Peering, Route53)
 #
-# Required:
-#   PROD_KUBECONFIG - path to production cluster kubeconfig
-#   DR_KUBECONFIG   - path to DR cluster kubeconfig
+# Kubeconfigs (first match wins):
+#   PROD_KUBECONFIG / DR_KUBECONFIG  make variables
+#   KUBECONFIG                       hub install only (if PROD not set)
+#   ~/values-secret-<pattern>.yaml   ocp-primary / ocp-dr kubeconfig paths
 # =============================================================================
 
-# Expand ~ in kubeconfig paths
+PATTERN_NAME ?= netapp-dr-starter-kit
+VALUES_SECRET ?=
+_RESOLVE_KUBECONFIGS := $(abspath scripts/resolve_kubeconfigs_from_values_secret.py)
+
+# Expand ~ in kubeconfig paths; else read from values-secret (same file load-secrets uses).
 PROD_KUBECONFIG ?=
 DR_KUBECONFIG ?=
-_PROD_KUBECONFIG := $(if $(PROD_KUBECONFIG),$(shell echo $(PROD_KUBECONFIG)),)
-_DR_KUBECONFIG := $(if $(DR_KUBECONFIG),$(shell echo $(DR_KUBECONFIG)),)
+_PROD_FROM_SECRET := $(shell PATTERN_NAME="$(PATTERN_NAME)" VALUES_SECRET="$(VALUES_SECRET)" python3 "$(_RESOLVE_KUBECONFIGS)" prod 2>/dev/null)
+_DR_FROM_SECRET := $(shell PATTERN_NAME="$(PATTERN_NAME)" VALUES_SECRET="$(VALUES_SECRET)" python3 "$(_RESOLVE_KUBECONFIGS)" dr 2>/dev/null)
+_PROD_KUBECONFIG := $(if $(PROD_KUBECONFIG),$(shell echo $(PROD_KUBECONFIG)),$(if $(KUBECONFIG),$(shell echo $(KUBECONFIG)),$(_PROD_FROM_SECRET)))
+_DR_KUBECONFIG := $(if $(DR_KUBECONFIG),$(shell echo $(DR_KUBECONFIG)),$(_DR_FROM_SECRET))
+_VALUES_SECRET_FILE := $(if $(VALUES_SECRET),$(shell echo $(VALUES_SECRET)),$(HOME)/values-secret-$(PATTERN_NAME).yaml)
 EXTRA_PLAYBOOK_OPTS ?=
 
 # Optional overrides (empty = auto-detect from cluster)
@@ -62,13 +94,15 @@ endif
 # Validation
 define _validate_kubeconfigs
 	@if [ -z "$(_PROD_KUBECONFIG)" ]; then \
-		echo "Error: PROD_KUBECONFIG is required."; \
-		echo "Usage: make $(1) PROD_KUBECONFIG=/path/to/prod DR_KUBECONFIG=/path/to/dr"; \
+		echo "Error: hub (primary) kubeconfig not found."; \
+		echo "  Configure ocp-primary-cluster-kubeconfig in $(_VALUES_SECRET_FILE)"; \
+		echo "  or pass PROD_KUBECONFIG=/path/to/prod (or export KUBECONFIG)."; \
 		exit 1; \
 	fi
 	@if [ -z "$(_DR_KUBECONFIG)" ]; then \
-		echo "Error: DR_KUBECONFIG is required."; \
-		echo "Usage: make $(1) PROD_KUBECONFIG=/path/to/prod DR_KUBECONFIG=/path/to/dr"; \
+		echo "Error: DR kubeconfig not found."; \
+		echo "  Configure ocp-dr-cluster-kubeconfig in $(_VALUES_SECRET_FILE)"; \
+		echo "  or pass DR_KUBECONFIG=/path/to/dr."; \
 		exit 1; \
 	fi
 	@if [ ! -f "$(_PROD_KUBECONFIG)" ]; then \
@@ -89,7 +123,7 @@ endef
 wait-crossplane-bootstrap: ## After install: wait for discovery ConfigMap and two OntapFileSystem CRs on the hub
 	$(call _validate_kubeconfigs,wait-crossplane-bootstrap)
 	@echo "Waiting for Crossplane network discovery and dual FSx CRs (hub cluster)..."
-	ansible-playbook $(EXTRA_PLAYBOOK_OPTS) ansible/wait-crossplane-bootstrap.yaml \
+	@$(ANSIBLE_RUN) ansible/wait-crossplane-bootstrap.yaml \
 		-e prod_kubeconfig=$(_PROD_KUBECONFIG) \
 		-e dr_kubeconfig=$(_DR_KUBECONFIG)
 

@@ -1,0 +1,102 @@
+---
+# Staged Argo CD health gates for `make install`.
+# rhvp.cluster_utils.install waits for every Application to be Synced+Healthy, which
+# crossplane-aws-infra cannot satisfy until in-cluster discovery runs. This playbook
+# implements the phased waits used by the Makefile install target.
+#
+# Usage:
+#   ansible-playbook ansible/wait-argo-applications.yaml \
+#     -e prod_kubeconfig=... -e wait_phase=pre_bootstrap
+#
+- name: Wait for Argo CD applications (staged)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    prod_kubeconfig: "{{ prod_kubeconfig | default(lookup('env', 'PROD_KUBECONFIG') | default('', true)) }}"
+    pattern_name: "{{ pattern_name | default('netapp-dr-starter-kit') }}"
+    repo_root: "{{ playbook_dir }}/.."
+    hub_argo_namespace: "{{ pattern_name }}-hub"
+    wait_timeout: 3600
+    wait_delay: 30
+    wait_phase: pre_bootstrap
+    pre_bootstrap_exclude:
+      - crossplane-aws-infra
+      - dr-dns-reconciler
+    post_bootstrap_include:
+      - crossplane-aws-infra
+      - dr-dns-reconciler
+  tasks:
+    - name: Resolve kubeconfig paths from values-secret
+      ansible.builtin.include_tasks: tasks/resolve-kubeconfigs-from-values-secret.yaml
+
+    - name: Require production kubeconfig
+      ansible.builtin.assert:
+        that:
+          - prod_kubeconfig | length > 0
+          - prod_kubeconfig is file
+        fail_msg: >-
+          Hub kubeconfig required: set ocp-primary-cluster-kubeconfig in
+          ~/values-secret-{{ pattern_name }}.yaml, or pass PROD_KUBECONFIG / KUBECONFIG.
+
+    - name: Select wait policy for phase
+      ansible.builtin.set_fact:
+        _wait_apps_include: "{{ post_bootstrap_include if wait_phase == 'post_bootstrap' else [] }}"
+        _wait_apps_exclude: "{{ [] if wait_phase == 'post_bootstrap' else pre_bootstrap_exclude }}"
+        _wait_require_healthy: "{{ wait_phase != 'post_bootstrap' }}"
+
+    - name: Wait for Argo CD applications ({{ wait_phase }})
+      ansible.builtin.shell: |
+        set -euo pipefail
+        exec oc --kubeconfig={{ prod_kubeconfig | quote }} get applications.argoproj.io \
+          -n {{ hub_argo_namespace }} -o json | python3 -c "
+        import json, sys
+
+        phase = {{ wait_phase | to_json }}
+        include = set({{ _wait_apps_include | to_json }})
+        exclude = set({{ _wait_apps_exclude | to_json }})
+        require_healthy = {{ _wait_require_healthy | to_json }}
+
+        data = json.load(sys.stdin)
+        items = data.get('items', [])
+        if not items:
+            print('No Argo CD applications found', file=sys.stderr)
+            sys.exit(1)
+
+        bad = []
+        checked = 0
+        for item in items:
+            name = (item.get('metadata') or {}).get('name') or ''
+            if include and name not in include:
+                continue
+            if name in exclude:
+                continue
+            checked += 1
+            status = item.get('status') or {}
+            sync = (status.get('sync') or {}).get('status') or 'Unknown'
+            health = (status.get('health') or {}).get('status') or 'Unknown'
+            ok = sync == 'Synced'
+            if require_healthy:
+                ok = ok and health == 'Healthy'
+            if not ok:
+                bad.append(f'{name} (sync={sync}, health={health})')
+
+        if checked == 0:
+            want = f'include={sorted(include)}' if include else f'exclude={sorted(exclude)}'
+            print(f'No applications matched {want}', file=sys.stderr)
+            sys.exit(1)
+        if bad:
+            print(f'Phase {phase}: not ready ({len(bad)} app(s)):', file=sys.stderr)
+            for line in bad:
+                print(f'  - {line}', file=sys.stderr)
+            sys.exit(1)
+        print(f'Phase {phase}: {checked} application(s) ready')
+        "
+      register: _argo_wait
+      until: _argo_wait.rc == 0
+      retries: "{{ (wait_timeout | int) // (wait_delay | int) }}"
+      delay: "{{ wait_delay | int }}"
+      changed_when: false
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "{{ _argo_wait.stdout | trim }}"

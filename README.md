@@ -50,16 +50,15 @@ vi values-global.yaml
 cp values-secret.yaml.template ~/values-secret-netapp-dr-starter-kit.yaml
 vi ~/values-secret-netapp-dr-starter-kit.yaml
 
-# Optional: regenerate Helm values locally instead of waiting for in-cluster discovery
-# ./pattern.sh make crossplane-setup \
-#   PROD_KUBECONFIG="${HOME}/.kube/kubeconfig-prod" \
-#   DR_KUBECONFIG="${HOME}/.kube/kubeconfig-dr"
+# Uncomment and set kubeconfig paths in values-secret (same paths used by make install / discovery):
+#   ocp-dr-cluster-kubeconfig      -> DR cluster
+#   ocp-primary-cluster-kubeconfig -> production / hub cluster
 
 # Create ~/.fsx for Ontap filesystem / SVM admin password material
 printf '%s\n' 'YourSecurePassword' > ~/.fsx
 chmod 600 ~/.fsx
 
-# Install the Validated Pattern on a target cluster (from Makefile-common; uses Podman)
+# Install on the hub; kubeconfig paths are read from ~/values-secret-netapp-dr-starter-kit.yaml
 ./pattern.sh make install
 ```
 
@@ -71,6 +70,7 @@ For Route53 / zone discovery, ensure AWS credentials are configured as described
 
 | Target | Description |
 | ------ | ----------- |
+| `make install` | Install on the hub using kubeconfig paths from `~/values-secret-netapp-dr-starter-kit.yaml` (`ocp-primary-cluster-kubeconfig`, `ocp-dr-cluster-kubeconfig`); staged Argo waits, discovery, dual FSx CRs. Override with `PROD_KUBECONFIG` / `DR_KUBECONFIG` if needed. |
 | `make crossplane-setup` | Optional: run `ansible/crossplane-setup.yaml` to discover clusters and **write** Crossplane-related fields into local `values-*.yaml` (break-glass; default is in-cluster discovery + ConfigMap merge). |
 | `make destroy-dr` / `make dr-destroy` | Run `ansible/crossplane-destroy.yaml`: pause Argo, clean ONTAP/SnapMirror, scrub AppVault S3, delete Crossplane claims, AWS CLI fallback; **requires typing `yes`**. |
 | `make deps-js` | `npm ci` for Node devDependencies. |

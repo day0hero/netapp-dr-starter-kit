@@ -3,7 +3,8 @@
 # Does not fight Argo CD sync loops — discovery + PostSync on the chart queue the FSx sync.
 #
 # Usage:
-#   make wait-crossplane-bootstrap PROD_KUBECONFIG=... DR_KUBECONFIG=...
+#   make wait-crossplane-bootstrap
+#   (kubeconfigs from ~/values-secret-netapp-dr-starter-kit.yaml unless overridden)
 #
 - name: Wait for Crossplane discovery and dual FSx CRs
   hosts: localhost
@@ -11,7 +12,8 @@
   vars:
     prod_kubeconfig: "{{ prod_kubeconfig | default(lookup('env', 'PROD_KUBECONFIG') | default('', true)) }}"
     dr_kubeconfig: "{{ dr_kubeconfig | default(lookup('env', 'DR_KUBECONFIG') | default('', true)) }}"
-    pattern_name: netapp-dr-starter-kit
+    pattern_name: "{{ pattern_name | default('netapp-dr-starter-kit') }}"
+    repo_root: "{{ playbook_dir }}/.."
     cluster_group: hub
     hub_argo_namespace: "{{ pattern_name }}-hub"
     parent_argo_namespace: vp-gitops
@@ -25,23 +27,27 @@
     wait_app_timeout: 1200
     wait_discovery_timeout: 1200
     wait_fsx_timeout: 1800
-    repo_root: "{{ playbook_dir }}/.."
   tasks:
+    - name: Resolve kubeconfig paths from values-secret
+      ansible.builtin.include_tasks: tasks/resolve-kubeconfigs-from-values-secret.yaml
+
     - name: Require production kubeconfig
       ansible.builtin.assert:
         that:
           - prod_kubeconfig | length > 0
           - prod_kubeconfig is file
-        fail_msg: "Set prod_kubeconfig (or PROD_KUBECONFIG) to the hub cluster kubeconfig."
+        fail_msg: >-
+          Hub kubeconfig required: set ocp-primary-cluster-kubeconfig in
+          ~/values-secret-{{ pattern_name }}.yaml, or pass PROD_KUBECONFIG / KUBECONFIG.
 
-    - name: Require DR kubeconfig (must match values-secret ocp-dr-cluster-kubeconfig path)
+    - name: Require DR kubeconfig
       ansible.builtin.assert:
         that:
           - dr_kubeconfig | length > 0
           - dr_kubeconfig is file
         fail_msg: >-
-          Set DR_KUBECONFIG and load the same path into ~/values-secret-{{ pattern_name }}.yaml
-          (ocp-dr-cluster-kubeconfig) before make install.
+          DR kubeconfig required: set ocp-dr-cluster-kubeconfig in
+          ~/values-secret-{{ pattern_name }}.yaml, or pass DR_KUBECONFIG.
 
     - name: Wait for crossplane-aws-infra Application
       ansible.builtin.command:
@@ -51,6 +57,52 @@
           -n {{ hub_argo_namespace }}
       register: _cp_app
       until: _cp_app.rc == 0
+      retries: "{{ (wait_app_timeout | int) // 20 }}"
+      delay: 20
+      changed_when: false
+
+    - name: Wait for crossplane-aws-infra Application Synced
+      ansible.builtin.command:
+        cmd: >
+          oc --kubeconfig={{ prod_kubeconfig | quote }}
+          get application.argoproj.io crossplane-aws-infra
+          -n {{ hub_argo_namespace }}
+          -o jsonpath={.status.sync.status}
+      register: _cp_app_sync
+      until: _cp_app_sync.stdout == 'Synced'
+      retries: "{{ (wait_app_timeout | int) // 20 }}"
+      delay: 20
+      changed_when: false
+
+    - name: Wait for crossplane and crossplane-providers Applications Synced
+      ansible.builtin.shell: |
+        set -euo pipefail
+        exec oc --kubeconfig={{ prod_kubeconfig | quote }} get applications.argoproj.io \
+          -n {{ hub_argo_namespace }} -o json | python3 -c "
+        import json, sys
+        names = {'crossplane', 'crossplane-providers'}
+        items = json.load(sys.stdin).get('items', [])
+        found = {(i.get('metadata') or {}).get('name') for i in items}
+        missing = names - found
+        if missing:
+            print('Missing apps:', ', '.join(sorted(missing)), file=sys.stderr)
+            sys.exit(1)
+        bad = []
+        for i in items:
+            n = (i.get('metadata') or {}).get('name') or ''
+            if n not in names:
+                continue
+            sync = ((i.get('status') or {}).get('sync') or {}).get('status')
+            health = ((i.get('status') or {}).get('health') or {}).get('status')
+            if sync != 'Synced' or health != 'Healthy':
+                bad.append(f'{n} (sync={sync}, health={health})')
+        if bad:
+            for line in bad:
+                print(line, file=sys.stderr)
+            sys.exit(1)
+        "
+      register: _cp_stack
+      until: _cp_stack.rc == 0
       retries: "{{ (wait_app_timeout | int) // 20 }}"
       delay: 20
       changed_when: false
