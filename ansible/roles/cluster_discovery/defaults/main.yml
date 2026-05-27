@@ -10,7 +10,7 @@
 # Path to the kubeconfig for this cluster (required)
 # cluster_discovery_kubeconfig: ""
 
-# Override: cluster infrastructure name (from infrastructure/cluster .status.infrastructureName)
+# Override: OpenShift cluster name (defaults to infrastructure/cluster metadata.name, else infrastructureName)
 # cluster_discovery_name_override: ""
 
 # Override: AWS region

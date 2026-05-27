@@ -20,9 +20,11 @@
     discovery_cm: crossplane-network-discovery
     discovery_cronjob: crossplane-network-discovery
     dr_kubeconfig_secret: ocp-dr-cluster-kubeconfig
-    wait_app_timeout: "{{ wait_app_timeout | default(1200) }}"
-    wait_discovery_timeout: "{{ wait_discovery_timeout | default(1200) }}"
-    wait_fsx_timeout: "{{ wait_fsx_timeout | default(1800) }}"
+    # Literal defaults only — do not use wait_* | default() here (self-reference → recursive loop).
+    # Override with: ansible-playbook ... -e wait_app_timeout=2400
+    wait_app_timeout: 1200
+    wait_discovery_timeout: 1200
+    wait_fsx_timeout: 1800
     repo_root: "{{ playbook_dir }}/.."
   tasks:
     - name: Require production kubeconfig
@@ -99,10 +101,22 @@
       failed_when: false
       changed_when: false
 
-    - name: Run discovery Job if ConfigMap not complete yet
+    - name: Discovery ConfigMap missing or empty (not complete)
+      ansible.builtin.set_fact:
+        discovery_cm_complete: false
       when: >
         _disc_probe.rc != 0 or
-        not ((_disc_probe.stdout | default('') | from_json).get('_discoveryComplete', false))
+        (_disc_probe.stdout | default('', true) | trim | length) == 0
+
+    - name: Parse discovery ConfigMap _discoveryComplete
+      ansible.builtin.set_fact:
+        discovery_cm_complete: "{{ (_disc_probe.stdout | from_json).get('_discoveryComplete', false) | bool }}"
+      when: >
+        _disc_probe.rc == 0 and
+        (_disc_probe.stdout | default('', true) | trim | length) > 0
+
+    - name: Run discovery Job if ConfigMap not complete yet
+      when: not (discovery_cm_complete | default(false) | bool)
       block:
         - name: Set discovery install Job name
           ansible.builtin.set_fact:
@@ -141,7 +155,8 @@
       register: _disc_raw
       until: >
         _disc_raw.rc == 0 and
-        (_disc_raw.stdout | default('') | from_json).get('_discoveryComplete', false)
+        (_disc_raw.stdout | default('', true) | trim | length) > 0 and
+        (_disc_raw.stdout | from_json).get('_discoveryComplete', false)
       retries: "{{ (wait_discovery_timeout | int) // 30 }}"
       delay: 30
       changed_when: false
@@ -223,7 +238,9 @@
           oc --kubeconfig={{ prod_kubeconfig | quote }}
           get ontapfilesystems.fsx.aws.upbound.io -o json
       register: _fsx_json
-      until: (_fsx_json.stdout | from_json).get('items', []) | length >= 2
+      until: >
+        _fsx_json.rc == 0 and
+        (_fsx_json.stdout | from_json).get('items', []) | length >= 2
       retries: "{{ (wait_fsx_timeout | int) // 30 }}"
       delay: 30
       changed_when: false
@@ -249,5 +266,5 @@
     - name: Summary
       ansible.builtin.debug:
         msg:
-          - "Discovery complete and {{ (_fsx_json.stdout | from_json).items | length }} OntapFileSystem CR(s) exist."
+          - "Discovery complete and {{ (_fsx_json.stdout | from_json).get('items', []) | length }} OntapFileSystem CR(s) exist."
           - "AWS FSx provisioning can take 15–30 minutes; Trident may stay Degraded until endpoints are ready."

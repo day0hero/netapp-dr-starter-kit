@@ -73,6 +73,129 @@
         cacheable: true
 
 # -----------------------------------------------------------------------------
+# Play 1b: Resolve FSx / VPC peering names from hub (matches Crossplane tags)
+# -----------------------------------------------------------------------------
+- name: Resolve FSx and VPC peering names from hub
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Collect hub identifiers via shell (discovery + CRs)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export KUBECONFIG="{{ prod_kubeconfig }}"
+        PROD_REG="{{ prod_cluster.region }}"
+        DR_REG="{{ dr_cluster.region }}"
+        DISC=""
+        for NS in crossplane-system openshift-gitops; do
+          D=$(oc get configmap crossplane-network-discovery -n "${NS}" \
+            -o jsonpath='{.data.discovery\.json}' 2>/dev/null || true)
+          if [ -n "${D}" ]; then DISC="${D}"; break; fi
+        done
+        FSX_JSON=$(oc get ontapfilesystems.fsx.aws.upbound.io -o json 2>/dev/null || echo '{"items":[]}')
+        PCX_JSON=$(oc get vpcpeeringconnection.ec2.aws.upbound.io -o json 2>/dev/null || echo '{"items":[]}')
+        DISC_JSON="${DISC}" FSX_JSON="${FSX_JSON}" PCX_JSON="${PCX_JSON}" \
+          DEFAULT_PROD_FSX="{{ prod_file_system_name | default(prod_cluster.cluster_name ~ '-' ~ prod_cluster.region ~ '-fsx') }}" \
+          DEFAULT_DR_FSX="{{ dr_file_system_name | default(dr_cluster.cluster_name ~ '-' ~ dr_cluster.region ~ '-fsx') }}" \
+          DEFAULT_PEER="{{ prod_cluster.cluster_name }}-to-{{ dr_cluster.cluster_name }}" \
+          PROD_REG="${PROD_REG}" DR_REG="${DR_REG}" python3 <<'PY'
+        import json, os
+
+        prod_reg = os.environ["PROD_REG"]
+        dr_reg = os.environ["DR_REG"]
+        default_prod = os.environ["DEFAULT_PROD_FSX"]
+        default_dr = os.environ["DEFAULT_DR_FSX"]
+        default_peer = os.environ["DEFAULT_PEER"]
+
+        disc = {}
+        raw = os.environ.get("DISC_JSON", "")
+        if raw.strip():
+            try:
+                disc = json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+
+        prod_fsx = default_prod
+        dr_fsx = default_dr
+        peer = default_peer
+        prod_cn = ""
+        dr_cn = ""
+
+        fsx = json.loads(os.environ.get("FSX_JSON", '{"items":[]}'))
+        for item in fsx.get("items") or []:
+            name = (item.get("metadata") or {}).get("name") or ""
+            region = ((item.get("spec") or {}).get("forProvider") or {}).get("region") or ""
+            if not name:
+                continue
+            if region == prod_reg:
+                prod_fsx = name
+            elif region == dr_reg:
+                dr_fsx = name
+
+        fo = disc.get("fsxOntap") or {}
+        if fo.get("fileSystemName"):
+            prod_fsx = fo["fileSystemName"]
+        peer_fsx = fo.get("peer") or {}
+        if peer_fsx.get("fileSystemName"):
+            dr_fsx = peer_fsx["fileSystemName"]
+
+        vp = disc.get("vpcPeering") or {}
+        prod_vp = vp.get("prod") or {}
+        dr_vp = vp.get("dr") or {}
+        if prod_vp.get("clusterName") and dr_vp.get("clusterName"):
+            peer = f"{prod_vp['clusterName']}-to-{dr_vp['clusterName']}"
+            prod_cn = prod_vp["clusterName"]
+            dr_cn = dr_vp["clusterName"]
+
+        pcx = json.loads(os.environ.get("PCX_JSON", '{"items":[]}'))
+        for item in pcx.get("items") or []:
+            cr_name = (item.get("metadata") or {}).get("name") or ""
+            if cr_name and "-to-" in cr_name:
+                peer = cr_name
+                break
+
+        print(json.dumps({
+            "prod_fsx_name": prod_fsx,
+            "dr_fsx_name": dr_fsx,
+            "peering_name": peer,
+            "prod_cluster_name": prod_cn,
+            "dr_cluster_name": dr_cn,
+        }))
+        PY
+      register: _hub_ids
+      changed_when: false
+      failed_when: false
+
+    - name: Apply resolved FSx and peering identifiers
+      ansible.builtin.set_fact:
+        _hub_resolved: "{{ _hub_ids.stdout | from_json }}"
+        cacheable: true
+
+    - name: Set FSx and peering facts for destroy
+      ansible.builtin.set_fact:
+        _prod_fsx_name: "{{ _hub_resolved.prod_fsx_name }}"
+        _dr_fsx_name: "{{ _hub_resolved.dr_fsx_name }}"
+        _peering_name: "{{ _hub_resolved.peering_name }}"
+        prod_cluster: >-
+          {{ prod_cluster | combine({'cluster_name': _hub_resolved.prod_cluster_name})
+             if (_hub_resolved.prod_cluster_name | default('') | trim) != ''
+             else prod_cluster }}
+        dr_cluster: >-
+          {{ dr_cluster | combine({'cluster_name': _hub_resolved.dr_cluster_name})
+             if (_hub_resolved.dr_cluster_name | default('') | trim) != ''
+             else dr_cluster }}
+        cacheable: true
+
+    - name: Display resolved destroy targets
+      ansible.builtin.debug:
+        msg:
+          - "Resolved destroy targets (hub discovery / Crossplane CRs):"
+          - "  Prod FSx:     {{ _prod_fsx_name }}"
+          - "  DR FSx:       {{ _dr_fsx_name }}"
+          - "  VPC peering:  {{ _peering_name }}"
+          - "  Prod cluster: {{ prod_cluster.cluster_name }}"
+          - "  DR cluster:   {{ dr_cluster.cluster_name }}"
+
+# -----------------------------------------------------------------------------
 # Play 2: Pause ArgoCD auto-sync on both clusters
 # -----------------------------------------------------------------------------
 - name: Pause ArgoCD Applications
@@ -148,9 +271,18 @@
   gather_facts: false
   vars:
     _project_root: "{{ playbook_dir }}/.."
-    _prod_fsx_name: "{{ prod_file_system_name | default(prod_cluster.cluster_name ~ '-' ~ prod_cluster.region ~ '-fsx') }}"
-    _dr_fsx_name: "{{ dr_file_system_name | default(dr_cluster.cluster_name ~ '-' ~ dr_cluster.region ~ '-fsx') }}"
   tasks:
+    - name: Ensure FSx name facts exist (set in hub resolve play when possible)
+      ansible.builtin.set_fact:
+        _prod_fsx_name: >-
+          {{ _prod_fsx_name | default(
+               prod_file_system_name | default(prod_cluster.cluster_name ~ '-' ~ prod_cluster.region ~ '-fsx')
+             ) }}
+        _dr_fsx_name: >-
+          {{ _dr_fsx_name | default(
+               dr_file_system_name | default(dr_cluster.cluster_name ~ '-' ~ dr_cluster.region ~ '-fsx')
+             ) }}
+        cacheable: true
     - name: Try reading endpoints from Production ConfigMap
       ansible.builtin.shell: >-
         KUBECONFIG="{{ prod_kubeconfig }}" oc get configmap fsx-endpoints -n trident
@@ -204,9 +336,18 @@
     - name: Fall back to AWS CLI discovery for Production
       ansible.builtin.shell: |
         set -o pipefail
-        FS_JSON=$(aws fsx describe-file-systems --region "{{ prod_cluster.region }}" \
-          --query "FileSystems[?Tags[?Key=='Name'&&Value=='{{ _prod_fsx_name }}']]|[0]" \
-          --output json 2>/dev/null || echo "null")
+        FS_JSON=$(FSX_LOOKUP_NAME="{{ _prod_fsx_name }}" aws fsx describe-file-systems \
+          --region "{{ prod_cluster.region }}" --output json 2>/dev/null | python3 -c "
+        import json, os, sys
+        name = os.environ['FSX_LOOKUP_NAME']
+        for fs in json.load(sys.stdin).get('FileSystems', []):
+            tags = {t['Key']: t['Value'] for t in fs.get('Tags', [])}
+            if tags.get('Name') == name:
+                print(json.dumps(fs))
+                break
+        else:
+            print('null')
+        " || echo "null")
         [ "${FS_JSON}" = "null" ] && exit 0
         echo "${FS_JSON}" | python3 -c "
         import sys,json
@@ -221,9 +362,18 @@
     - name: Fall back to AWS CLI discovery for DR
       ansible.builtin.shell: |
         set -o pipefail
-        FS_JSON=$(aws fsx describe-file-systems --region "{{ dr_cluster.region }}" \
-          --query "FileSystems[?Tags[?Key=='Name'&&Value=='{{ _dr_fsx_name }}']]|[0]" \
-          --output json 2>/dev/null || echo "null")
+        FS_JSON=$(FSX_LOOKUP_NAME="{{ _dr_fsx_name }}" aws fsx describe-file-systems \
+          --region "{{ dr_cluster.region }}" --output json 2>/dev/null | python3 -c "
+        import json, os, sys
+        name = os.environ['FSX_LOOKUP_NAME']
+        for fs in json.load(sys.stdin).get('FileSystems', []):
+            tags = {t['Key']: t['Value'] for t in fs.get('Tags', [])}
+            if tags.get('Name') == name:
+                print(json.dumps(fs))
+                break
+        else:
+            print('null')
+        " || echo "null")
         [ "${FS_JSON}" = "null" ] && exit 0
         echo "${FS_JSON}" | python3 -c "
         import sys,json
@@ -737,9 +887,16 @@
     - name: Look up FSx filesystem IDs by name tag
       ansible.builtin.shell: |
         set -o pipefail
-        aws fsx describe-file-systems --region {{ item.region }} \
-          --query "FileSystems[?Tags[?Key=='Name' && Value=='{{ item.name }}']].FileSystemId" \
-          --output text 2>/dev/null | head -1
+        FSX_LOOKUP_NAME="{{ item.name }}" aws fsx describe-file-systems --region {{ item.region }} \
+          --output json 2>/dev/null | python3 -c "
+        import json, os
+        name = os.environ['FSX_LOOKUP_NAME']
+        for fs in json.load(sys.stdin).get('FileSystems', []):
+            tags = {t['Key']: t['Value'] for t in fs.get('Tags', [])}
+            if tags.get('Name') == name:
+                print(fs['FileSystemId'])
+                break
+        " | head -1
       loop:
         - name: "{{ _prod_fsx_name }}"
           region: "{{ prod_cluster.region }}"
@@ -920,6 +1077,7 @@
         DR_VPC_ID: "{{ dr_cluster.vpc_id | default('') }}"
         PROD_FSX_NAME: "{{ _prod_fsx_name }}"
         DR_FSX_NAME: "{{ _dr_fsx_name }}"
+        PEERING_NAME: "{{ _peering_name | default(prod_cluster.cluster_name ~ '-to-' ~ dr_cluster.cluster_name) }}"
         PROD_CLUSTER_NAME: "{{ prod_cluster.cluster_name }}"
         DR_CLUSTER_NAME: "{{ dr_cluster.cluster_name }}"
       register: _aws_fallback_destroy

@@ -47,10 +47,15 @@
 # Resolve each value: use override if provided, otherwise use looked-up value
 - name: Resolve cluster_name - {{ cluster_discovery_label }}
   ansible.builtin.set_fact:
+    # Match discover-network.py: metadata.name (OpenShift cluster) before infrastructureName.
     cluster_discovery_resolved_cluster_name: >-
       {{ cluster_discovery_name_override | default('') | trim
          if (cluster_discovery_name_override | default('') | trim) != ''
-         else cluster_discovery_infra_info.resources[0].status.infrastructureName }}
+         else (
+           cluster_discovery_infra_info.resources[0].metadata.name | default('')
+           if (cluster_discovery_infra_info.resources[0].metadata.name | default('') | trim) != ''
+           else cluster_discovery_infra_info.resources[0].status.infrastructureName
+         ) }}
 
 - name: Resolve region - {{ cluster_discovery_label }}
   ansible.builtin.set_fact:

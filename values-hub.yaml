@@ -331,18 +331,21 @@ clusterGroup:
             - .spec.forProvider.vpcPeeringConnectionId
             - .spec.managementPolicies
             - .spec.initProvider
+            - .status
         - group: ec2.aws.upbound.io
           kind: SecurityGroup
           jqPathExpressions:
             - .spec.forProvider.tags
             - .spec.managementPolicies
             - .spec.initProvider
+            - .status
         - group: ec2.aws.upbound.io
           kind: SecurityGroupRule
           jqPathExpressions:
             - .spec.forProvider.securityGroupId
             - .spec.managementPolicies
             - .spec.initProvider
+            - .status
         - group: ec2.aws.upbound.io
           kind: VPCPeeringConnectionOptions
           jqPathExpressions:
@@ -360,11 +363,13 @@ clusterGroup:
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
+            - .status
         - group: fsx.aws.upbound.io
           kind: OntapStorageVirtualMachine
           jqPathExpressions:
             - .spec.managementPolicies
             - .spec.initProvider
+            - .status
         - group: s3.aws.upbound.io
           kind: Bucket
           jqPathExpressions:
@@ -461,6 +466,19 @@ clusterGroup:
       chart: boutique
       chartVersion: 0.0.*
       argoProject: workload
+      syncPolicy:
+        syncOptions:
+          - RespectIgnoreDifferences=true
+      ignoreDifferences:
+        # Pattern operator owns this CRD; boutique chart only references it.
+        # jsonPointers [/] does not clear OutOfSync on all Argo versions; ignore whole object via jq.
+        - group: apiextensions.k8s.io
+          kind: CustomResourceDefinition
+          name: patterns.gitops.hybrid-cloud-patterns.io
+          jqPathExpressions:
+            - .metadata
+            - .spec
+            - .status
       overrides:
         - name: global.storageClass
           value: storage-class-nfs
